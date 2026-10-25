@@ -51,19 +51,16 @@ MainComponent::MainComponent()
         auto& strip = *strips[(size_t) i];
         addAndMakeVisible (strip);
 
-        strip.fader.onValueChange = [this, i, faderTarget]
+        strip.fader.onValueChange = [this, i]
         {
-            const auto db = strips[(size_t) i]->fader.getValue();
-            channels[(size_t) i]->setGain (dbToGain (db));
-            settings.getUserSettings()->setValue (faderTarget, db);
+            channels[(size_t) i]->setGain (dbToGain (strips[(size_t) i]->fader.getValue()));
+            saveSession();
         };
         strip.fader.onDragStart = [this, faderTarget] { takeover[faderTarget].locked = false; };
         strip.fader.onRightClick = [this, faderTarget, name] { showLearnMenu (faderTarget, name + " fader"); };
-        strip.fader.setValue (props->getDoubleValue (faderTarget, 0.0));
 
         strip.muteButton.onClick = [this, i] { setMuted (i, strips[(size_t) i]->muteButton.getToggleState()); };
         strip.muteButton.onRightClick = [this, i, name] { showLearnMenu ("mute." + juce::String (i), name + " mute"); };
-        setMuted (i, props->getBoolValue ("mute." + juce::String (i)));
 
         strip.fileButton.onClick = [this, i] { showFileMenu (i); };
     }
@@ -73,11 +70,10 @@ MainComponent::MainComponent()
     masterStrip.fader.onValueChange = [this]
     {
         masterTarget = dbToGain (masterStrip.fader.getValue());
-        settings.getUserSettings()->setValue ("fader.master", masterStrip.fader.getValue());
+        saveSession();
     };
     masterStrip.fader.onDragStart = [this] { takeover["fader.master"].locked = false; };
     masterStrip.fader.onRightClick = [this] { showLearnMenu ("fader.master", "Master fader"); };
-    masterStrip.fader.setValue (props->getDoubleValue ("fader.master", 0.0));
 
     for (auto* b : { &goButton, &transportButton, &prevKeyButton, &nextKeyButton })
         addAndMakeVisible (b);
@@ -91,9 +87,12 @@ MainComponent::MainComponent()
     nextKeyButton.onClick = [this] { stepCuedKey (1); };
     nextKeyButton.onRightClick = [this] { showLearnMenu ("keyNext", "Next key"); };
 
-    addAndMakeVisible (libraryButton);
+    addAndMakeVisible (addKeyButton);
+    addKeyButton.onClick = [this] { addKey ([this] (int k) { cueKey (k); }); };
+
+    addAndMakeVisible (setButton);
     addAndMakeVisible (settingsButton);
-    libraryButton.onClick = [this] { showLibraryMenu(); };
+    setButton.onClick = [this] { showSetMenu(); };
     settingsButton.onClick = [this] { showDeviceSettings(); };
 
     addAndMakeVisible (fadeTimeLabel);
@@ -103,8 +102,8 @@ MainComponent::MainComponent()
     fadeTimeSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 24);
     fadeTimeSlider.setRange (0.5, 30.0, 0.5);
     fadeTimeSlider.setTextValueSuffix (" s");
-    fadeTimeSlider.setValue (props->getDoubleValue ("fadeTime", 8.0));
-    fadeTimeSlider.onValueChange = [this] { settings.getUserSettings()->setValue ("fadeTime", fadeTimeSlider.getValue()); };
+    fadeTimeSlider.setValue (8.0);
+    fadeTimeSlider.onValueChange = [this] { saveSession(); };
 
     disableKeyboardFocus (*this);   // keep Space / arrows for GO and key selection
     setWantsKeyboardFocus (true);
@@ -116,11 +115,13 @@ MainComponent::MainComponent()
     midiDevicesChanged = juce::MidiDeviceListConnection::make ([this] { enableMidiInputs(); });
     enableMidiInputs();
 
-    const juce::File lib (props->getValue ("library"));
-    if (lib.isDirectory())
-        setLibrary (lib, true);
-    else
-        errorMessage = "Choose your loop library folder with the Library button";
+    // Pick up where the last session left off, saved set or not.
+    if (auto xml = props->getXmlValue ("session"))
+    {
+        const juce::File setFile (props->getValue ("setFile"));
+        liveSet.file = setFile.existsAsFile() ? setFile : juce::File();
+        loadSetXml (*xml, liveSet.getFolder());
+    }
 
     refreshUi();
     startTimerHz (30);
@@ -234,66 +235,390 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 void MainComponent::releaseResources() {}
 
 //==============================================================================
-void MainComponent::showLibraryMenu()
+void MainComponent::showSetMenu()
 {
-    juce::PopupMenu m;
-    m.addItem (1, "Choose library folder...");
-    m.addItem (2, "Rescan library", library.root.isDirectory());
-    m.addItem (3, "Open library folder", library.root.isDirectory());
+    const bool saved = liveSet.file.existsAsFile();
 
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&libraryButton), [this] (int r)
+    juce::PopupMenu m;
+    m.addSectionHeader (liveSet.getName());
+    m.addItem (1, "New set");
+    m.addItem (2, "Open set...");
+    m.addSeparator();
+    m.addItem (3, "Save set", saved);
+    m.addItem (4, "Save set as new folder...");
+    m.addSeparator();
+    m.addItem (5, "Show set folder", saved);
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&setButton), [this] (int r)
     {
-        if (r == 1) chooseLibrary();
-        if (r == 2) setLibrary (library.root, false);
-        if (r == 3) library.root.startAsProcess();
+        if (r == 1) newSet();
+        if (r == 2) openSet();
+        if (r == 3) saveSet (false);
+        if (r == 4) saveSet (true);
+        if (r == 5) liveSet.file.revealToUser();
     });
 }
 
-void MainComponent::chooseLibrary()
+void MainComponent::newSet()
 {
-    fileChooser = std::make_unique<juce::FileChooser> (
-        "Choose the loop library folder",
-        library.root.isDirectory() ? library.root : juce::File::getSpecialLocation (juce::File::userMusicDirectory));
+    if (transportPlaying)
+    {
+        errorMessage = "Stop playback before starting a new set";
+        repaint();
+        return;
+    }
 
-    fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+    liveSet.file = juce::File();
+    loadSetXml (juce::XmlElement ("LiveRigSet"), {});
+}
+
+void MainComponent::openSet()
+{
+    if (transportPlaying)
+    {
+        errorMessage = "Stop playback before opening another set";
+        repaint();
+        return;
+    }
+
+    fileChooser = std::make_unique<juce::FileChooser> ("Open a set",
+                                                       liveSet.getFolder().getParentDirectory(),
+                                                       juce::String ("*") + LiveSet::fileExtension);
+
+    fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc)
                               {
-                                  if (fc.getResult().isDirectory())
-                                      setLibrary (fc.getResult(), false);
+                                  const auto file = fc.getResult();
+                                  if (! file.existsAsFile())
+                                      return;
+
+                                  auto xml = juce::XmlDocument::parse (file);
+                                  if (xml == nullptr || ! xml->hasTagName ("LiveRigSet"))
+                                  {
+                                      errorMessage = file.getFileName() + " is not a Live Rig set";
+                                      repaint();
+                                      return;
+                                  }
+
+                                  liveSet.file = file;
+                                  loadSetXml (*xml, file.getParentDirectory());
                               });
 }
 
-void MainComponent::setLibrary (const juce::File& root, bool restoreSession)
+void MainComponent::saveSet (bool asNewFolder)
 {
-    const auto activeName = activeKey >= 0 ? library.keys[(size_t) activeKey].name : juce::String();
-    const auto cuedName = cuedKey >= 0 ? library.keys[(size_t) cuedKey].name : juce::String();
-
-    LoopLibrary::createFolders (root);
-    library.scan (root, formatManager.getWildcardForAllFormats());
-    settings.getUserSettings()->setValue ("library", root.getFullPathName());
-
-    activeKey = library.indexOfKey (activeName);
-    cuedKey = library.indexOfKey (cuedName);
-    rebuildKeyButtons();
-
-    errorMessage = library.keys.empty()
-                       ? "No keys yet: add one folder per key inside " + root.getChildFile ("Keys").getFullPathName()
-                       : juce::String();
-
-    if (restoreSession)
+    auto saveInto = [this] (const juce::File& folder)
     {
-        auto* props = settings.getUserSettings();
+        int external = 0;
+        for (auto& f : liveSet.allFiles())
+            if (f.existsAsFile() && ! f.isAChildOf (folder))
+                ++external;
 
-        if (const int k = library.indexOfKey (props->getValue ("activeKey")); k >= 0)
-            cueKey (k);
+        if (external == 0)
+        {
+            saveSetTo (folder, false);
+            return;
+        }
 
-        for (int ch : { (int) nature, (int) tones })
-            if (const juce::File f (props->getValue ("file." + juce::String (ch))); f.existsAsFile())
-                cueFile (ch, f);
+        askChoice ("Save set",
+                   juce::String (external) + (external == 1 ? " file" : " files") + " will be gathered into\n"
+                       + folder.getFullPathName() + "\n\nCopy them (the originals stay where they are), or move them?",
+                   { "Copy files", "Move files", "Cancel" },
+                   [this, folder] (int r)
+                   {
+                       if (r == 1) saveSetTo (folder, false);
+                       if (r == 2) saveSetTo (folder, true);
+                   });
+    };
 
-        go();   // the transport is stopped, so this just loads everything silently
+    if (! asNewFolder && liveSet.file.existsAsFile())
+    {
+        saveInto (liveSet.getFolder());
+        return;
     }
 
+    const auto startDir = liveSet.file.existsAsFile() ? liveSet.getFolder().getParentDirectory()
+                                                      : juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+
+    fileChooser = std::make_unique<juce::FileChooser> ("Name the new set folder",
+                                                       startDir.getChildFile (liveSet.file.existsAsFile() ? liveSet.getName() + " copy"
+                                                                                                          : "My Set"));
+
+    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                              [saveInto] (const juce::FileChooser& fc)
+                              {
+                                  const auto chosen = fc.getResult();
+                                  if (chosen != juce::File())
+                                      saveInto (chosen.getParentDirectory().getChildFile (chosen.getFileNameWithoutExtension()));
+                              });
+}
+
+void MainComponent::saveSetTo (const juce::File& folder, bool moveFiles)
+{
+    if (! folder.createDirectory())
+    {
+        errorMessage = "Could not create " + folder.getFullPathName();
+        repaint();
+        return;
+    }
+
+    // Lay the folder out as a library: Keys/<key>/, Nature/, Tones/.
+    std::map<juce::String, juce::File> moved;
+    juce::StringArray failed;
+
+    auto place = [&] (const juce::File& f, const juce::File& destFolder)
+    {
+        if (! f.existsAsFile() || f.isAChildOf (folder) || moved.count (f.getFullPathName()) > 0)
+            return;
+
+        destFolder.createDirectory();
+        const auto dest = destFolder.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), true);
+
+        if (moveFiles ? f.moveFileTo (dest) : f.copyFileTo (dest))
+            moved[f.getFullPathName()] = dest;
+        else
+            failed.add (f.getFileName());
+    };
+
+    for (auto& k : liveSet.keys)
+        for (auto& f : k.pads)
+            place (f, folder.getChildFile ("Keys").getChildFile (juce::File::createLegalFileName (k.name)));
+
+    for (auto& f : liveSet.bins[0]) place (f, folder.getChildFile ("Nature"));
+    for (auto& f : liveSet.bins[1]) place (f, folder.getChildFile ("Tones"));
+
+    liveSet.relocate (moved);
+
+    for (auto& s : state)
+    {
+        if (auto it = moved.find (s.current.getFullPathName()); it != moved.end())
+            s.current = it->second;
+        if (s.cued.has_value())
+            if (auto it = moved.find (s.cued->getFullPathName()); it != moved.end())
+                s.cued = it->second;
+    }
+
+    liveSet.file = folder.getChildFile (juce::File::createLegalFileName (folder.getFileName()) + LiveSet::fileExtension);
+
+    if (! createSetXml (folder)->writeTo (liveSet.file))
+    {
+        errorMessage = "Could not write " + liveSet.file.getFullPathName();
+    }
+    else
+    {
+        errorMessage = failed.isEmpty() ? juce::String()
+                                        : "Could not " + juce::String (moveFiles ? "move" : "copy") + ": " + failed.joinIntoString (", ");
+        infoMessage = "Saved " + liveSet.getName()
+                    + (moved.empty() ? juce::String()
+                                     : " - " + juce::String ((int) moved.size()) + (moveFiles ? " files moved" : " files copied"))
+                    + " into " + folder.getFullPathName();
+    }
+
+    saveSession();
+    refreshUi();
+}
+
+std::unique_ptr<juce::XmlElement> MainComponent::createSetXml (const juce::File& baseFolder) const
+{
+    auto xml = std::make_unique<juce::XmlElement> ("LiveRigSet");
+    xml->setAttribute ("version", 1);
+    liveSet.addToXml (*xml, baseFolder);
+
+    auto* mixer = xml->createNewChildElement ("Mixer");
+    for (size_t i = 0; i < strips.size(); ++i)
+    {
+        mixer->setAttribute ("fader" + juce::String ((int) i), strips[i]->fader.getValue());
+        mixer->setAttribute ("mute" + juce::String ((int) i), channels[i]->isMuted());
+    }
+    mixer->setAttribute ("master", masterStrip.fader.getValue());
+    mixer->setAttribute ("crossfade", fadeTimeSlider.getValue());
+
+    auto* playing = xml->createNewChildElement ("Playing");
+    playing->setAttribute ("key", activeKey >= 0 ? liveSet.keys[(size_t) activeKey].name : juce::String());
+    playing->setAttribute ("nature", LiveSet::encode (state[nature].current, baseFolder));
+    playing->setAttribute ("tones", LiveSet::encode (state[tones].current, baseFolder));
+    return xml;
+}
+
+void MainComponent::loadSetXml (const juce::XmlElement& xml, const juce::File& baseFolder)
+{
+    restoring = true;
+
+    for (size_t i = 0; i < channels.size(); ++i)
+    {
+        clearCue ((int) i);
+        channels[i]->changeClip (nullptr, 0.0, false);
+        state[i].current = juce::File();
+    }
+
+    activeKey = cuedKey = -1;
+    goPending = false;
+    errorMessage.clear();
+    infoMessage.clear();
+
+    liveSet.loadFromXml (xml, baseFolder);
+
+    const auto* mixer = xml.getChildByName ("Mixer");
+    for (int i = 0; i < numLoopChannels; ++i)
+    {
+        strips[(size_t) i]->fader.setValue (mixer != nullptr ? mixer->getDoubleAttribute ("fader" + juce::String (i)) : 0.0);
+        setMuted (i, mixer != nullptr && mixer->getBoolAttribute ("mute" + juce::String (i)));
+    }
+    masterStrip.fader.setValue (mixer != nullptr ? mixer->getDoubleAttribute ("master") : 0.0);
+    fadeTimeSlider.setValue (mixer != nullptr ? mixer->getDoubleAttribute ("crossfade", 8.0) : 8.0);
+
+    rebuildKeyButtons();
+
+    int missing = 0;
+    for (auto& f : liveSet.allFiles())
+        if (! f.existsAsFile())
+            ++missing;
+    if (missing > 0)
+        errorMessage = juce::String (missing) + (missing == 1 ? " file in this set was" : " files in this set were") + " not found";
+
+    // Cue what was playing; with the transport stopped it loads silently.
+    if (const auto* playing = xml.getChildByName ("Playing"))
+    {
+        const auto keyName = playing->getStringAttribute ("key");
+        for (size_t k = 0; k < liveSet.keys.size(); ++k)
+            if (liveSet.keys[k].name == keyName)
+                cueKey ((int) k);
+
+        for (int ch : { (int) nature, (int) tones })
+            if (const auto f = LiveSet::decode (playing->getStringAttribute (ch == nature ? "nature" : "tones"), baseFolder);
+                f.existsAsFile())
+                cueFile (ch, f);
+    }
+
+    restoring = false;
+    saveSession();
+    refreshUi();
+}
+
+void MainComponent::saveSession()
+{
+    if (restoring)
+        return;
+
+    auto* props = settings.getUserSettings();
+    props->setValue ("session", createSetXml (liveSet.getFolder()).get());
+    props->setValue ("setFile", liveSet.file.getFullPathName());
+}
+
+//==============================================================================
+void MainComponent::addKey (std::function<void (int)> then)
+{
+    askText ("Name the new key", "Key " + juce::String ((int) liveSet.keys.size() + 1), [this, then] (juce::String name)
+    {
+        liveSet.keys.push_back ({ name, {} });
+        rebuildKeyButtons();
+        saveSession();
+
+        if (then)
+            then ((int) liveSet.keys.size() - 1);
+    });
+}
+
+void MainComponent::showKeyMenu (int index)
+{
+    const auto& key = liveSet.keys[(size_t) index];
+    auto padLabel = [&] (int p)
+    {
+        return key.pads[(size_t) p] == juce::File() ? juce::String ("(empty)") : key.pads[(size_t) p].getFileNameWithoutExtension();
+    };
+
+    juce::PopupMenu m;
+    m.addSectionHeader (key.name);
+    m.addItem (1, "Load Pad 1...   " + padLabel (0));
+    m.addItem (2, "Load Pad 2...   " + padLabel (1));
+    m.addItem (3, "Clear Pad 1", key.pads[0] != juce::File());
+    m.addItem (4, "Clear Pad 2", key.pads[1] != juce::File());
+    m.addSeparator();
+    m.addItem (5, "Rename...");
+    m.addItem (6, "Move left", index > 0);
+    m.addItem (7, "Move right", index < (int) liveSet.keys.size() - 1);
+    m.addSeparator();
+    m.addItem (8, "Delete key");
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (keyButtons[index]), [this, index] (int r)
+    {
+        if (index >= (int) liveSet.keys.size())
+            return;
+
+        if (r == 1 || r == 2) browseForPad (index, r - 1);
+        if (r == 3 || r == 4) assignPad (index, r - 3, juce::File());
+
+        if (r == 5)
+            askText ("Rename key", liveSet.keys[(size_t) index].name, [this, index] (juce::String name)
+            {
+                if (index < (int) liveSet.keys.size())
+                {
+                    liveSet.keys[(size_t) index].name = name;
+                    rebuildKeyButtons();
+                    saveSession();
+                    refreshUi();
+                }
+            });
+
+        if (r == 6 || r == 7)
+        {
+            const int other = index + (r == 6 ? -1 : 1);
+            std::swap (liveSet.keys[(size_t) index], liveSet.keys[(size_t) other]);
+            auto fix = [&] (int& k) { if (k == index) k = other; else if (k == other) k = index; };
+            fix (activeKey);
+            fix (cuedKey);
+            rebuildKeyButtons();
+            saveSession();
+            refreshUi();
+        }
+
+        if (r == 8) deleteKey (index);
+    });
+}
+
+void MainComponent::deleteKey (int index)
+{
+    if (index == cuedKey)
+    {
+        cuedKey = -1;
+        clearCue (pad1);
+        clearCue (pad2);
+    }
+    else if (index < cuedKey)
+    {
+        --cuedKey;
+    }
+
+    if (index == activeKey)     activeKey = -1;   // its pads keep playing until the next key
+    else if (index < activeKey) --activeKey;
+
+    liveSet.keys.erase (liveSet.keys.begin() + index);
+    rebuildKeyButtons();
+    saveSession();
+    refreshUi();
+}
+
+void MainComponent::browseForPad (int keyIndex, int pad)
+{
+    browseForFiles ("Choose Pad " + juce::String (pad + 1) + " for " + liveSet.keys[(size_t) keyIndex].name, false,
+                    [this, keyIndex, pad] (juce::Array<juce::File> files)
+                    {
+                        if (keyIndex < (int) liveSet.keys.size())
+                            assignPad (keyIndex, pad, files[0]);
+                    });
+}
+
+void MainComponent::assignPad (int keyIndex, int pad, const juce::File& file)
+{
+    liveSet.keys[(size_t) keyIndex].pads[(size_t) pad] = file;
+
+    // Keep what's cued in step with the key being edited.
+    if (keyIndex == cuedKey || (keyIndex == activeKey && cuedKey < 0))
+        cueFile (pad, file);
+    else if (activeKey < 0 && cuedKey < 0)
+        cueKey (keyIndex);
+
+    saveSession();
     refreshUi();
 }
 
@@ -301,20 +626,164 @@ void MainComponent::rebuildKeyButtons()
 {
     keyButtons.clear();
 
-    for (size_t i = 0; i < library.keys.size(); ++i)
+    for (size_t i = 0; i < liveSet.keys.size(); ++i)
     {
-        auto* b = keyButtons.add (new juce::TextButton (library.keys[i].name));
+        auto* b = keyButtons.add (new RightClickable<juce::TextButton> (liveSet.keys[i].name));
         b->setWantsKeyboardFocus (false);
         b->onClick = [this, i] { cueKey ((int) i); };
+        b->onRightClick = [this, i] { showKeyMenu ((int) i); };
         addAndMakeVisible (b);
     }
 
     resized();
 }
 
+//==============================================================================
+void MainComponent::browseForFiles (const juce::String& title, bool multiple,
+                                    std::function<void (juce::Array<juce::File>)> onChosen)
+{
+    const juce::File startDir (settings.getUserSettings()->getValue (
+        "lastFolder", juce::File::getSpecialLocation (juce::File::userMusicDirectory).getFullPathName()));
+
+    fileChooser = std::make_unique<juce::FileChooser> (title, startDir, formatManager.getWildcardForAllFormats());
+
+    auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    if (multiple)
+        chooserFlags |= juce::FileBrowserComponent::canSelectMultipleItems;
+
+    fileChooser->launchAsync (chooserFlags,[this, onChosen] (const juce::FileChooser& fc)
+    {
+        auto files = fc.getResults();
+        if (files.isEmpty())
+            return;
+
+        settings.getUserSettings()->setValue ("lastFolder", files[0].getParentDirectory().getFullPathName());
+        onChosen (files);
+    });
+}
+
+void MainComponent::loadIntoChannel (int channel, const juce::Array<juce::File>& files)
+{
+    if (files.isEmpty())
+        return;
+
+    if (channel == nature || channel == tones)
+    {
+        addToBin (channel, files);
+        cueFile (channel, files[0]);
+        saveSession();
+        return;
+    }
+
+    // Pads belong to a key. Two files at once fill both pads.
+    auto assign = [this, channel, files] (int k)
+    {
+        if (files.size() >= 2)
+        {
+            assignPad (k, 0, files[0]);
+            assignPad (k, 1, files[1]);
+        }
+        else
+        {
+            assignPad (k, channel, files[0]);
+        }
+    };
+
+    if (const int k = editingKey(); k >= 0)
+        assign (k);
+    else
+        addKey (assign);
+}
+
+void MainComponent::addToBin (int channel, const juce::Array<juce::File>& files)
+{
+    auto& bin = liveSet.bins[(size_t) (channel - nature)];
+    for (auto& f : files)
+        bin.addIfNotAlreadyThere (f);
+}
+
+void MainComponent::showFileMenu (int channel)
+{
+    const auto& s = state[(size_t) channel];
+    juce::PopupMenu m;
+
+    if (channel == pad1 || channel == pad2)
+    {
+        const int k = editingKey();
+        m.addSectionHeader (k >= 0 ? liveSet.keys[(size_t) k].name + " - " + channelNames[channel] : juce::String (channelNames[channel]));
+
+        if (k >= 0 && liveSet.keys[(size_t) k].pads[(size_t) channel] != juce::File())
+            m.addItem (-1, liveSet.keys[(size_t) k].pads[(size_t) channel].getFileNameWithoutExtension(), false, true);
+
+        m.addItem (1, k >= 0 ? "Load file..." : "Load file (creates a key)...");
+        m.addItem (2, "Clear", k >= 0 && liveSet.keys[(size_t) k].pads[(size_t) channel] != juce::File());
+
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&strips[(size_t) channel]->fileButton),
+                         [this, channel] (int r)
+                         {
+                             if (r == 1)
+                                 browseForFiles ("Choose a loop for " + juce::String (channelNames[channel]), false,
+                                                 [this, channel] (juce::Array<juce::File> files) { loadIntoChannel (channel, files); });
+
+                             if (const int k = editingKey(); r == 2 && k >= 0)
+                                 assignPad (k, channel, juce::File());
+                         });
+        return;
+    }
+
+    const auto files = liveSet.bins[(size_t) (channel - nature)];
+    m.addSectionHeader (channelNames[channel]);
+
+    for (int i = 0; i < files.size(); ++i)
+        m.addItem (100 + i, files[i].getFileNameWithoutExtension(), true, files[i] == s.current);
+
+    if (! files.isEmpty())
+        m.addSeparator();
+
+    m.addItem (1, "Add files...");
+    m.addItem (2, "Silence", s.current != juce::File());
+
+    if (! files.isEmpty())
+    {
+        juce::PopupMenu remove;
+        for (int i = 0; i < files.size(); ++i)
+            remove.addItem (1000 + i, files[i].getFileNameWithoutExtension());
+        m.addSubMenu ("Remove from list", remove);
+    }
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&strips[(size_t) channel]->fileButton),
+                     [this, channel, files] (int r)
+                     {
+                         if (r == 1)
+                             browseForFiles ("Add loops to " + juce::String (channelNames[channel]), true,
+                                             [this, channel] (juce::Array<juce::File> chosen) { loadIntoChannel (channel, chosen); });
+
+                         if (r == 2)
+                             cueFile (channel, juce::File());
+
+                         if (r >= 100 && r < 100 + files.size())
+                             cueFile (channel, files[r - 100]);
+
+                         if (r >= 1000 && r < 1000 + files.size())
+                         {
+                             const auto f = files[r - 1000];
+                             liveSet.bins[(size_t) (channel - nature)].removeAllInstancesOf (f);
+                             if (state[(size_t) channel].cued == f)
+                                 clearCue (channel);
+                             saveSession();
+                             refreshUi();
+                         }
+                     });
+}
+
+int MainComponent::editingKey() const
+{
+    return cuedKey >= 0 ? cuedKey : activeKey;
+}
+
 void MainComponent::cueKey (int index)
 {
-    if (index < 0 || index >= (int) library.keys.size())
+    if (index < 0 || index >= (int) liveSet.keys.size())
         return;
 
     if (index == activeKey)
@@ -328,14 +797,14 @@ void MainComponent::cueKey (int index)
     }
 
     cuedKey = index;
-    const auto& files = library.keys[(size_t) index].files;
-    cueFile (pad1, files.size() > 0 ? files[0] : juce::File());
-    cueFile (pad2, files.size() > 1 ? files[1] : juce::File());
+    const auto& pads = liveSet.keys[(size_t) index].pads;
+    cueFile (pad1, pads[0]);
+    cueFile (pad2, pads[1]);
 }
 
 void MainComponent::stepCuedKey (int direction)
 {
-    const int n = (int) library.keys.size();
+    const int n = (int) liveSet.keys.size();
     if (n == 0)
         return;
 
@@ -349,36 +818,41 @@ void MainComponent::stepCuedKey (int direction)
 void MainComponent::cueFile (int channel, const juce::File& file)
 {
     auto& s = state[(size_t) channel];
+    infoMessage.clear();
 
-    if (file == s.current && channels[(size_t) channel]->getClip() != nullptr)
+    if (file == s.current && (file == juce::File() || channels[(size_t) channel]->getClip() != nullptr))
     {
         clearCue (channel);   // already playing this one
-        refreshUi();
-        return;
     }
-
-    s.cued = file;
-    s.cuedClip = nullptr;
-    const int token = ++s.loadToken;
-    s.loading = file != juce::File();
-
-    if (s.loading)
+    else
     {
-        juce::Component::SafePointer<MainComponent> safe (this);
-        auto* formats = &formatManager;
+        s.cued = file;
+        s.cuedClip = nullptr;
+        const int token = ++s.loadToken;
+        s.loading = file != juce::File();
 
-        loader.addJob ([safe, formats, channel, file, token]
+        if (s.loading)
         {
-            juce::String error;
-            auto clip = loadLoopClip (file, *formats, error);
+            juce::Component::SafePointer<MainComponent> safe (this);
+            auto* formats = &formatManager;
 
-            juce::MessageManager::callAsync ([safe, channel, token, clip, error]
+            loader.addJob ([safe, formats, channel, file, token]
             {
-                if (auto* self = safe.getComponent())
-                    self->clipLoaded (channel, token, clip, error);
+                juce::String error;
+                auto clip = loadLoopClip (file, *formats, error);
+
+                juce::MessageManager::callAsync ([safe, channel, token, clip, error]
+                {
+                    if (auto* self = safe.getComponent())
+                        self->clipLoaded (channel, token, clip, error);
+                });
             });
-        });
+        }
     }
+
+    // While stopped there's nothing to protect, so changes apply as soon as they're loaded.
+    if (! transportPlaying && anyCued() && ! anyLoading())
+        executeGo();
 
     refreshUi();
 }
@@ -410,7 +884,7 @@ void MainComponent::clipLoaded (int channel, int token, LoopClipPtr clip, const 
         s.cuedClip = std::move (clip);
     }
 
-    if (goPending && ! anyLoading())
+    if ((goPending || ! transportPlaying) && anyCued() && ! anyLoading())
     {
         goPending = false;
         executeGo();
@@ -419,39 +893,7 @@ void MainComponent::clipLoaded (int channel, int token, LoopClipPtr clip, const 
     refreshUi();
 }
 
-void MainComponent::showFileMenu (int channel)
-{
-    juce::Array<juce::File> files;
-
-    if (channel == pad1 || channel == pad2)
-    {
-        if (const int k = cuedKey >= 0 ? cuedKey : activeKey; k >= 0)
-            files = library.keys[(size_t) k].files;
-    }
-    else
-    {
-        files = channel == nature ? library.nature : library.tones;
-    }
-
-    const auto& s = state[(size_t) channel];
-    juce::PopupMenu m;
-    m.addSectionHeader ("Cue for " + juce::String (channelNames[channel]));
-    m.addItem (1, "Silence", true, s.current == juce::File());
-
-    for (int i = 0; i < files.size(); ++i)
-        m.addItem (i + 2, files[i].getFileNameWithoutExtension(), true, files[i] == s.current);
-
-    if (files.isEmpty())
-        m.addItem (-1, "No loops found in the library folder", false);
-
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&strips[(size_t) channel]->fileButton),
-                     [this, channel, files] (int r)
-                     {
-                         if (r == 1)      cueFile (channel, juce::File());
-                         else if (r >= 2) cueFile (channel, files[r - 2]);
-                     });
-}
-
+//==============================================================================
 void MainComponent::go()
 {
     if (! anyCued())
@@ -495,7 +937,9 @@ void MainComponent::executeGo()
         cuedKey = -1;
     }
 
-    errorMessage = allChanged ? juce::String() : "Still crossfading - press GO again when it finishes";
+    if (! allChanged)
+        errorMessage = "Still crossfading - press GO again when it finishes";
+
     saveSession();
     refreshUi();
 }
@@ -530,8 +974,8 @@ void MainComponent::setMuted (int channel, bool muted)
 {
     channels[(size_t) channel]->setMuted (muted);
     strips[(size_t) channel]->muteButton.setToggleState (muted, juce::dontSendNotification);
-    settings.getUserSettings()->setValue ("mute." + juce::String (channel), muted);
     updateMidiLeds();
+    saveSession();
 }
 
 bool MainComponent::anyCued() const
@@ -542,15 +986,6 @@ bool MainComponent::anyCued() const
 bool MainComponent::anyLoading() const
 {
     return std::any_of (state.begin(), state.end(), [] (const ChannelState& s) { return s.loading; });
-}
-
-void MainComponent::saveSession()
-{
-    auto* props = settings.getUserSettings();
-    props->setValue ("activeKey", activeKey >= 0 ? library.keys[(size_t) activeKey].name : juce::String());
-
-    for (int ch : { (int) nature, (int) tones })
-        props->setValue ("file." + juce::String (ch), state[(size_t) ch].current.getFullPathName());
 }
 
 void MainComponent::refreshUi()
@@ -575,7 +1010,7 @@ void MainComponent::refreshUi()
         else                    colourButton (b, Theme::panel, Theme::text);
     }
 
-    const bool cued = anyCued();
+    const bool cued = transportPlaying && anyCued();
     goButton.setButtonText (goPending ? "LOADING..." : "GO");
     colourButton (goButton, cued ? Theme::warn : Theme::panel, cued ? Theme::background : Theme::textDim);
 
@@ -604,6 +1039,87 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     }
 
     return false;
+}
+
+bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files)
+        if (formatManager.findFormatForFileExtension (juce::File (f).getFileExtension()) != nullptr)
+            return true;
+    return false;
+}
+
+void MainComponent::filesDropped (const juce::StringArray& paths, int x, int y)
+{
+    juce::Array<juce::File> files;
+    for (auto& p : paths)
+        if (formatManager.findFormatForFileExtension (juce::File (p).getFileExtension()) != nullptr)
+            files.add (juce::File (p));
+
+    const juce::Point<int> pos (x, y);
+
+    for (int i = 0; i < numLoopChannels; ++i)
+        if (strips[(size_t) i]->getBounds().contains (pos))
+            return loadIntoChannel (i, files);
+
+    for (int k = 0; k < keyButtons.size(); ++k)
+    {
+        if (keyButtons[k]->getBounds().contains (pos))
+        {
+            const auto& pads = liveSet.keys[(size_t) k].pads;
+            const int firstPad = (files.size() == 1 && pads[0] != juce::File() && pads[1] == juce::File()) ? 1 : 0;
+
+            for (int i = 0; i < juce::jmin (files.size(), 2 - firstPad); ++i)
+                assignPad (k, firstPad + i, files[i]);
+            return;
+        }
+    }
+
+    if (addKeyButton.getBounds().contains (pos))
+    {
+        addKey ([this, files] (int k)
+        {
+            for (int i = 0; i < juce::jmin (files.size(), 2); ++i)
+                assignPad (k, i, files[i]);
+        });
+        return;
+    }
+
+    errorMessage = "Drop audio files onto a channel or a key";
+    repaint();
+}
+
+//==============================================================================
+void MainComponent::askText (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> onOk)
+{
+    auto* w = new juce::AlertWindow (title, {}, juce::MessageBoxIconType::NoIcon, this);
+    w->addTextEditor ("text", initial);
+    w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    // Modal callbacks run before the window is deleted, so reading it here is safe.
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([w, onOk] (int r)
+    {
+        const auto text = w->getTextEditorContents ("text").trim();
+        if (r == 1 && text.isNotEmpty())
+            onOk (text);
+    }), true);
+}
+
+void MainComponent::askChoice (const juce::String& title, const juce::String& message,
+                               const juce::StringArray& buttons, std::function<void (int)> onChosen)
+{
+    auto* w = new juce::AlertWindow (title, message, juce::MessageBoxIconType::QuestionIcon, this);
+
+    // Buttons return 1, 2, ...; the last one is Cancel and returns 0.
+    for (int i = 0; i < buttons.size(); ++i)
+    {
+        const bool isCancel = i == buttons.size() - 1;
+        w->addButton (buttons[i], isCancel ? 0 : i + 1,
+                      isCancel ? juce::KeyPress (juce::KeyPress::escapeKey) : juce::KeyPress());
+    }
+
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([onChosen] (int r) { onChosen (r); }), true);
 }
 
 //==============================================================================
@@ -777,7 +1293,8 @@ void MainComponent::timerCallback()
         handleMidi (p.device, p.message);
 
     // Take keyboard focus back after dialogs and menus so Space always means GO.
-    if (auto* peer = getPeer(); peer != nullptr && peer->isFocused() && ! hasKeyboardFocus (true))
+    if (auto* peer = getPeer(); peer != nullptr && peer->isFocused() && ! hasKeyboardFocus (true)
+        && juce::Component::getCurrentlyModalComponent() == nullptr)
         grabKeyboardFocus();
 }
 
@@ -786,11 +1303,15 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Theme::background);
 
-    // Header: app name and audio device status.
+    // Header: app name, set name and audio device status.
     auto header = headerArea;
     g.setColour (Theme::text);
     g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
-    g.drawText ("LIVE RIG", header.removeFromLeft (130), juce::Justification::centredLeft);
+    g.drawText ("LIVE RIG", header.removeFromLeft (120), juce::Justification::centredLeft);
+
+    g.setColour (liveSet.file.existsAsFile() ? Theme::text : Theme::textDim);
+    g.setFont (juce::FontOptions (17.0f));
+    g.drawFittedText (liveSet.getName(), header.removeFromLeft (240), juce::Justification::centredLeft, 1);
 
     auto dot = header.removeFromLeft (14).withSizeKeepingCentre (10, 10).toFloat();
     g.setColour (deviceOpen ? Theme::accent : Theme::danger);
@@ -806,20 +1327,29 @@ void MainComponent::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
     g.drawText ("KEY", keyArea.removeFromTop (20), juce::Justification::centredLeft);
 
-    g.setColour (activeKey < 0 ? Theme::textDim : transportPlaying ? Theme::accent : Theme::text);
-    g.setFont (juce::FontOptions (64.0f, juce::Font::bold));
-    g.drawFittedText (activeKey >= 0 ? library.keys[(size_t) activeKey].name : juce::String ("-"),
-                      keyArea.removeFromTop (80), juce::Justification::centredLeft, 1);
+    if (liveSet.keys.empty())
+    {
+        g.setFont (juce::FontOptions (18.0f));
+        g.drawFittedText ("Drag audio files onto a channel to start, or add a key with + KEY.",
+                          keyArea.removeFromTop (80), juce::Justification::centredLeft, 3);
+    }
+    else
+    {
+        g.setColour (activeKey < 0 ? Theme::textDim : transportPlaying ? Theme::accent : Theme::text);
+        g.setFont (juce::FontOptions (64.0f, juce::Font::bold));
+        g.drawFittedText (activeKey >= 0 ? liveSet.keys[(size_t) activeKey].name : juce::String ("-"),
+                          keyArea.removeFromTop (80), juce::Justification::centredLeft, 1);
+    }
 
     if (cuedKey >= 0)
     {
         g.setColour (Theme::warn);
         g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-        g.drawFittedText ("NEXT  " + library.keys[(size_t) cuedKey].name, keyArea.removeFromTop (36),
+        g.drawFittedText ("NEXT  " + liveSet.keys[(size_t) cuedKey].name, keyArea.removeFromTop (36),
                           juce::Justification::centredLeft, 1);
     }
 
-    // One status line: MIDI learn prompt, then errors, then MIDI devices.
+    // One status line: MIDI learn prompt, then errors, then confirmations, then MIDI devices.
     g.setFont (juce::FontOptions (15.0f));
     if (learnTarget.isNotEmpty())
     {
@@ -831,6 +1361,11 @@ void MainComponent::paint (juce::Graphics& g)
     {
         g.setColour (Theme::danger);
         g.drawText (errorMessage, messageArea, juce::Justification::centredLeft, true);
+    }
+    else if (infoMessage.isNotEmpty())
+    {
+        g.setColour (Theme::accent);
+        g.drawText (infoMessage, messageArea, juce::Justification::centredLeft, true);
     }
     else
     {
@@ -846,7 +1381,7 @@ void MainComponent::resized()
     headerArea = area.removeFromTop (36);
     settingsButton.setBounds (headerArea.removeFromRight (140).reduced (0, 2));
     headerArea.removeFromRight (8);
-    libraryButton.setBounds (headerArea.removeFromRight (110).reduced (0, 2));
+    setButton.setBounds (headerArea.removeFromRight (90).reduced (0, 2));
     headerArea.removeFromRight (12);
     area.removeFromTop (12);
 
@@ -875,10 +1410,16 @@ void MainComponent::resized()
 
     constexpr int columns = 3, rowHeight = 46, gap = 6;
     const int cellWidth = (left.getWidth() - (columns - 1) * gap) / columns;
+    auto cell = [&] (int i)
+    {
+        return juce::Rectangle<int> (left.getX() + (i % columns) * (cellWidth + gap),
+                                     left.getY() + (i / columns) * (rowHeight + gap),
+                                     cellWidth, rowHeight);
+    };
+
     for (int i = 0; i < keyButtons.size(); ++i)
-        keyButtons[i]->setBounds (left.getX() + (i % columns) * (cellWidth + gap),
-                                  left.getY() + (i / columns) * (rowHeight + gap),
-                                  cellWidth, rowHeight);
+        keyButtons[i]->setBounds (cell (i));
+    addKeyButton.setBounds (cell (keyButtons.size()));
 
     // Mixer: loop channels on the left, master on the right.
     constexpr int stripGap = 10;

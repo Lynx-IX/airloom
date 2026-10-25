@@ -21,7 +21,7 @@ target_sources(LiveRig PRIVATE
     Source/MainComponent.cpp
     Source/LoopPlayer.cpp
     Source/LoopChannel.cpp
-    Source/LoopLibrary.cpp
+    Source/LiveSet.cpp
     Source/MidiMap.cpp)
 
 target_compile_definitions(LiveRig PRIVATE

@@ -2,11 +2,12 @@
 
 #include <JuceHeader.h>
 #include "ChannelStrip.h"
+#include "LiveSet.h"
 #include "LoopChannel.h"
-#include "LoopLibrary.h"
 #include "MidiMap.h"
 
 class MainComponent : public juce::AudioAppComponent,
+                      public juce::FileDragAndDropTarget,
                       private juce::Timer,
                       private juce::ChangeListener,
                       private juce::MidiInputCallback
@@ -22,6 +23,9 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
+
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
 
 private:
     static constexpr int numLoopChannels = 4;
@@ -42,17 +46,37 @@ private:
     void showDeviceSettings();
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
-    // Library, cueing and transport
-    void showLibraryMenu();
-    void chooseLibrary();
-    void setLibrary (const juce::File& root, bool restoreSession);
+    // Sets
+    void showSetMenu();
+    void newSet();
+    void openSet();
+    void saveSet (bool asNewFolder);
+    void saveSetTo (const juce::File& folder, bool moveFiles);
+    std::unique_ptr<juce::XmlElement> createSetXml (const juce::File& baseFolder) const;
+    void loadSetXml (const juce::XmlElement& xml, const juce::File& baseFolder);
+    void saveSession();
+
+    // Keys
+    void addKey (std::function<void (int)> then = {});
+    void showKeyMenu (int index);
+    void deleteKey (int index);
+    void browseForPad (int keyIndex, int pad);
+    void assignPad (int keyIndex, int pad, const juce::File& file);
     void rebuildKeyButtons();
+
+    // Loading and cueing
+    void browseForFiles (const juce::String& title, bool multiple, std::function<void (juce::Array<juce::File>)> onChosen);
+    void loadIntoChannel (int channel, const juce::Array<juce::File>& files);
+    void addToBin (int channel, const juce::Array<juce::File>& files);
+    void showFileMenu (int channel);
     void cueKey (int index);
     void stepCuedKey (int direction);
     void cueFile (int channel, const juce::File& file);
     void clearCue (int channel);
     void clipLoaded (int channel, int token, LoopClipPtr clip, const juce::String& error);
-    void showFileMenu (int channel);
+    int editingKey() const;
+
+    // Transport
     void go();
     void executeGo();
     void toggleTransport();
@@ -61,7 +85,11 @@ private:
     bool anyCued() const;
     bool anyLoading() const;
     void refreshUi();
-    void saveSession();
+
+    // Dialogs
+    void askText (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> onOk);
+    void askChoice (const juce::String& title, const juce::String& message, const juce::StringArray& buttons,
+                    std::function<void (int)> onChosen);
 
     // MIDI
     void handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& m) override;
@@ -78,12 +106,13 @@ private:
     juce::AudioFormatManager formatManager;
     juce::ThreadPool loader { juce::ThreadPoolOptions{}.withNumberOfThreads (2) };
 
-    LoopLibrary library;
+    LiveSet liveSet;
     std::array<std::unique_ptr<LoopChannel>, numLoopChannels> channels;
     std::array<ChannelState, numLoopChannels> state;
     int activeKey = -1, cuedKey = -1;
     bool transportPlaying = false;
     bool goPending = false;               // GO pressed while cued loops were still loading
+    bool restoring = false;               // suppresses autosave while a set is being loaded
 
     std::atomic<float> masterTarget { 1.0f };
     juce::SmoothedValue<float> masterGain;
@@ -91,16 +120,17 @@ private:
     // UI
     std::array<std::unique_ptr<ChannelStrip>, numLoopChannels> strips;
     ChannelStrip masterStrip { "Master", false };
-    juce::OwnedArray<juce::TextButton> keyButtons;
+    juce::OwnedArray<RightClickable<juce::TextButton>> keyButtons;
+    juce::TextButton addKeyButton { "+ KEY" };
     RightClickable<juce::TextButton> goButton { "GO" }, transportButton { "START" },
                                      prevKeyButton { "< PREV" }, nextKeyButton { "NEXT >" };
-    juce::TextButton libraryButton { "Library" }, settingsButton { "Audio Settings" };
+    juce::TextButton setButton { "Set" }, settingsButton { "Audio Settings" };
     juce::Slider fadeTimeSlider;
     juce::Label fadeTimeLabel { {}, "Crossfade" };
     juce::Rectangle<int> headerArea, keyDisplayArea, messageArea;
     std::unique_ptr<juce::FileChooser> fileChooser;
 
-    juce::String deviceStatus, midiStatus, errorMessage;
+    juce::String deviceStatus, midiStatus, errorMessage, infoMessage;
     bool deviceOpen = false;
 
     // MIDI
