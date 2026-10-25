@@ -57,6 +57,9 @@ private:
     void openSet();
     void saveSet (bool asNewFolder);
     void saveSetTo (const juce::File& folder, bool moveFiles);
+    void exportPack();
+    void writePack (const juce::File& target);
+    void openPack (const juce::File& pack);
     void loadSet (const juce::XmlElement& xml, const juce::File& baseFolder);
     void saveSession();
 
@@ -191,6 +194,8 @@ private:
     int overdubSlotId = -1;                  // the loop being overdubbed right now
     juce::int64 firstLoopLength = 0;         // for "Match first loop"
     bool restoring = false;              // suppresses autosave while a set is being loaded
+
+    std::shared_ptr<std::atomic<double>> packProgress;   // set while a pack is being written or opened
 
     std::map<juce::String, LoopClipPtr> clipCache;
     std::map<juce::String, std::vector<std::function<void (LoopClipPtr)>>> pendingLoads;

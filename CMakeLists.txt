@@ -5,6 +5,10 @@ project(LiveRig VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Build the C++ runtime into the program, so Live Rig.exe runs on any Windows PC
+# without installing Microsoft's Visual C++ Redistributable first.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # Location of the JUCE framework (a git clone of https://github.com/juce-framework/JUCE).
 set(JUCE_DIR "C:/JUCE" CACHE PATH "Path to the JUCE framework")
 add_subdirectory(${JUCE_DIR} ${CMAKE_BINARY_DIR}/JUCE)

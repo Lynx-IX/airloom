@@ -3,6 +3,7 @@
 #include "Effects.h"
 #include "InputChannel.h"
 #include "InstrumentChannel.h"
+#include "LiveSet.h"
 #include "LoopChannel.h"
 #include "Looper.h"
 #include "TempoGuess.h"
@@ -282,6 +283,46 @@ namespace FxSelfTest
                 found.add (juce::String (o.bars) + "=" + juce::String (o.bpm, 1));
             check (found.contains ("2=60.0") && found.contains ("4=120.0") && found.contains ("3=90.0"),
                    "Tempo options for an 8 s loop: " + found.joinIntoString (", "));
+        }
+
+        // ---- Pack round trip: a set and its samples in one file, unpacked elsewhere ----
+        {
+            const auto work = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("LiveRigPackTest");
+            work.deleteRecursively();
+            const auto sample = work.getChildFile ("source/Rain.wav");
+            sample.getParentDirectory().createDirectory();
+            sample.replaceWithText ("pretend audio");
+
+            // As the export does: the set refers to its samples relative to its own folder.
+            const auto staging = work.getChildFile ("staging");
+            staging.createDirectory();
+            LiveSet set = LiveSet::makeDefault();
+            set.rows[1].slots[0].file = sample;
+            set.relocate ({ { sample.getFullPathName(), staging.getChildFile ("Ambient/Rain.wav") } });
+            const auto xmlText = set.toXml (staging)->toString();
+
+            juce::ZipFile::Builder zip;
+            zip.addFile (sample, 0, "My Set/Ambient/Rain.wav");
+            zip.addEntry (new juce::MemoryInputStream (xmlText.toRawUTF8(), xmlText.getNumBytesAsUTF8(), true), 6,
+                          "My Set/My Set.liverig", juce::Time::getCurrentTime());
+            const auto pack = work.getChildFile ("My Set.liverigpack");
+            {
+                juce::FileOutputStream out (pack);
+                zip.writeToStream (out, nullptr);
+            }
+
+            // Unpack somewhere else and open it.
+            const auto elsewhere = work.getChildFile ("other computer");
+            juce::ZipFile (pack).uncompressTo (elsewhere, true);
+            const auto setFile = elsewhere.getChildFile ("My Set/My Set.liverig");
+            LiveSet opened;
+            if (auto xml = juce::XmlDocument::parse (setFile))
+                opened.loadFromXml (*xml, setFile.getParentDirectory());
+
+            const auto found = opened.rows.size() > 1 ? opened.rows[1].slots[0].file : juce::File();
+            check (found.existsAsFile() && found.loadFileAsString() == "pretend audio" && found.isAChildOf (elsewhere),
+                   "Pack round trip: unpacked set finds its sample in its own folder (" + found.getRelativePathFrom (elsewhere) + ")");
+            work.deleteRecursively();
         }
 
         // ---- Reverse and per-channel effects ----

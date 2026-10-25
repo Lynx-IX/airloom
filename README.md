@@ -26,6 +26,10 @@ cmake --build %TEMP%\LiveRig-build --config Release
 
 The app is at `%TEMP%\LiveRig-build\LiveRig_artefacts\Release\Live Rig.exe`.
 
+**For another computer:** run `powershell -ExecutionPolicy Bypass -File package.ps1`. It builds and puts a ready copy
+in `Release\Live Rig\` (the program plus *How to install.txt*) and `Release\Live Rig for Windows.zip`. The program has
+the C++ runtime built in, so it runs on any Windows 10/11 PC with nothing to install - just copy and double-click.
+
 Self-test (renders test signals through the real effects, looper and Fire pad code, and plays a note on Vital if
 it's installed; writes a pass/fail report; can run while the app is open):
 
@@ -176,6 +180,12 @@ saved automatically, so the app reopens exactly where you left off.
   plus `Samples/` for anything not on a channel. You choose to **copy** (originals stay put) or **move** the files.
   Paths inside are relative, so the whole folder can be copied to another computer.
 - **Set > Save set** updates it; **Set > Open set...** opens a `.liverig`.
+- **Moving to another computer:** **Set > Export set as one file...** packs the set and every sample it uses (live-loop
+  recordings included) into a single `.liverigpack` - copy it on a USB stick or cloud drive. On the other computer,
+  **Set > Open set...** and pick the pack: it unpacks into `Music\Live Rig Sets\<name>` and opens, ready to play.
+  Plug-ins (Vital, Serum, Graillon...) can't travel in the pack - they need installing on each computer, often with a
+  licence - so the pack includes **Plug-ins needed.txt** listing what to install; their settings are in the set and
+  come back once they're installed.
 
 ## MidiMix
 

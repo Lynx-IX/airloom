@@ -1,0 +1,30 @@
+LIVE RIG - putting it on another computer
+=========================================
+
+1. Copy the "Live Rig" folder (or unzip "Live Rig for Windows.zip") somewhere on
+   the computer, e.g. the Desktop or Documents. There's nothing to install:
+   Live Rig.exe runs on its own on Windows 10 or 11.
+
+2. Double-click Live Rig.exe. If Windows shows "Windows protected your PC",
+   click "More info" then "Run anyway" (it appears because the app isn't
+   signed by a publisher - it's your own build).
+   Tip: right-click Live Rig.exe > "Show more options" > "Send to" >
+   "Desktop (create shortcut)" for a shortcut.
+
+3. Set it up once on that computer:
+   - Plug in your audio interface (install its driver first, e.g. Focusrite
+     Control for the Scarlett) and pick it in Audio Settings.
+   - Plug in the MidiMix and the Fire - they're found automatically.
+   - Install the plug-ins your sets use (Vital, Serum, Graillon...) from their
+     makers. Then press + INSTRUMENT > Scan for plug-ins once.
+
+4. Bring your sets over: on the old computer use Set > Export set as one file,
+   copy the .liverigpack across, then on this computer Set > Open set and pick
+   it. It unpacks into Music\Live Rig Sets and opens ready to play. The pack
+   includes "Plug-ins needed.txt" listing what to install.
+
+Settings for this computer (audio device, MIDI, the last session) are kept in
+%APPDATA%\LiveRig. Recorded loops are saved in %APPDATA%\LiveRig\Recordings
+until you save or export the set.
+
+To update Live Rig later, just replace Live Rig.exe with the new one.

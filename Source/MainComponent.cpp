@@ -406,6 +406,7 @@ void MainComponent::showSetMenu()
     m.addSeparator();
     m.addItem (3, "Save set", saved);
     m.addItem (4, "Save set as new folder...");
+    m.addItem (9, "Export set as one file (to move to another computer)...", packProgress == nullptr);
     m.addSeparator();
     m.addItem (5, "Show set folder", saved);
     m.addSeparator();
@@ -422,6 +423,7 @@ void MainComponent::showSetMenu()
         if (r == 3) saveSet (false);
         if (r == 4) saveSet (true);
         if (r == 5) liveSet.file.revealToUser();
+        if (r == 9) exportPack();
         if (r == 6) setZoom (scale + 0.1f);
         if (r == 7) setZoom (scale - 0.1f);
         if (r == 8) setZoom (1.0f);
@@ -487,9 +489,9 @@ void MainComponent::newSet()
 
 void MainComponent::openSet()
 {
-    fileChooser = std::make_unique<juce::FileChooser> ("Open a set",
+    fileChooser = std::make_unique<juce::FileChooser> ("Open a set (or a set packed into one file)",
                                                        liveSet.getFolder().getParentDirectory(),
-                                                       juce::String ("*") + LiveSet::fileExtension);
+                                                       juce::String ("*") + LiveSet::fileExtension + ";*" + LiveSet::packExtension);
 
     fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc)
@@ -497,6 +499,12 @@ void MainComponent::openSet()
                                   const auto file = fc.getResult();
                                   if (! file.existsAsFile())
                                       return;
+
+                                  if (file.hasFileExtension (LiveSet::packExtension))
+                                  {
+                                      openPack (file);
+                                      return;
+                                  }
 
                                   auto xml = juce::XmlDocument::parse (file);
                                   if (xml == nullptr || ! xml->hasTagName ("LiveRigSet"))
@@ -632,6 +640,200 @@ void MainComponent::saveSetTo (const juce::File& folder, bool moveFiles)
     pool.setFiles (liveSet.pool);
     saveSession();
     repaint();
+}
+
+void MainComponent::exportPack()
+{
+    const auto name = liveSet.file.existsAsFile() ? liveSet.getName() : juce::String ("My Set");
+    fileChooser = std::make_unique<juce::FileChooser> ("Export the set and its samples as one file",
+                                                       juce::File::getSpecialLocation (juce::File::userDesktopDirectory)
+                                                           .getChildFile (name + LiveSet::packExtension),
+                                                       juce::String ("*") + LiveSet::packExtension);
+
+    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [this] (const juce::FileChooser& fc)
+                              {
+                                  if (const auto chosen = fc.getResult(); chosen != juce::File())
+                                      writePack (chosen.withFileExtension (LiveSet::packExtension));
+                              });
+}
+
+void MainComponent::writePack (const juce::File& target)
+{
+    captureInstrumentStates();
+
+    // Lay the pack out like a saved set folder: one folder per group, Samples for the
+    // rest. Each sample gets a unique path inside the pack; nothing is copied yet.
+    const auto setName = juce::File::createLegalFileName (target.getFileNameWithoutExtension());
+    const auto staging = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                             .getChildFile ("LiveRigPack-" + juce::Uuid().toDashedString());
+    staging.createDirectory();   // only so paths can be written relative to it
+
+    std::map<juce::String, juce::File> placed;          // original path -> where it sits in the pack
+    std::vector<std::pair<juce::File, juce::String>> entries;
+    std::set<juce::String> used;
+    int missing = 0;
+
+    auto place = [&] (const juce::File& f, const juce::String& folder)
+    {
+        if (f == juce::File() || placed.count (f.getFullPathName()) > 0)
+            return;
+        if (! f.existsAsFile())
+        {
+            ++missing;
+            return;
+        }
+
+        auto name = f.getFileName();
+        for (int n = 2; used.count ((folder + "/" + name).toLowerCase()) > 0; ++n)
+            name = f.getFileNameWithoutExtension() + " (" + juce::String (n) + ")" + f.getFileExtension();
+
+        const auto path = folder + "/" + name;
+        used.insert (path.toLowerCase());
+        placed[f.getFullPathName()] = staging.getChildFile (path);
+        entries.push_back ({ f, setName + "/" + path });
+    };
+
+    for (auto& r : liveSet.rows)
+        for (auto& s : r.slots)
+            place (s.file, juce::File::createLegalFileName (r.name));
+    for (auto& f : liveSet.pool)
+        place (f, "Samples");
+
+    LiveSet packed = liveSet;
+    packed.relocate (placed);
+    const auto xmlText = packed.toXml (staging)->toString();
+    staging.deleteRecursively();
+
+    // Plug-ins can't travel in the pack (they need installing, often with a licence), so
+    // list what this set uses, to install on the other computer.
+    juce::StringArray needed;
+    auto note = [&needed] (const juce::String& pluginXml, const juce::String& usedFor)
+    {
+        juce::PluginDescription d;
+        if (auto xml = juce::parseXML (pluginXml); xml != nullptr && d.loadFromXml (*xml))
+            needed.addIfNotAlreadyThere (d.name + "  by " + d.manufacturerName
+                                         + (d.version.isNotEmpty() ? "  (version " + d.version + ")" : juce::String())
+                                         + "  -  " + usedFor);
+    };
+    for (auto& inst : liveSet.instruments)
+        note (inst.pluginXml, "instrument");
+    for (auto& in : liveSet.inputs)
+        note (in.insertXml, "effect on " + in.name);
+
+    const auto pluginNote = needed.isEmpty()
+        ? juce::String ("This set doesn't use any plug-ins.\n")
+        : "Install these plug-ins on the other computer (from their makers, with your licence where needed).\n"
+          "Their settings are saved in the set and come back once they're installed.\n\n"
+              + needed.joinIntoString ("\n") + "\n";
+
+    packProgress = std::make_shared<std::atomic<double>> (0.0);
+    infoMessage = "Exporting " + juce::String ((int) entries.size()) + " samples...";
+    repaint();
+
+    juce::Component::SafePointer<MainComponent> safe (this);
+    auto progress = packProgress;
+
+    loader.addJob ([safe, progress, target, entries, xmlText, pluginNote, setName, missing]
+    {
+        juce::ZipFile::Builder zip;
+        for (auto& [file, path] : entries)
+            zip.addFile (file, 0, path);   // audio barely compresses; storing is quick
+        zip.addEntry (new juce::MemoryInputStream (xmlText.toRawUTF8(), xmlText.getNumBytesAsUTF8(), true), 6,
+                      setName + "/" + setName + LiveSet::fileExtension, juce::Time::getCurrentTime());
+        zip.addEntry (new juce::MemoryInputStream (pluginNote.toRawUTF8(), pluginNote.getNumBytesAsUTF8(), true), 6,
+                      setName + "/Plug-ins needed.txt", juce::Time::getCurrentTime());
+
+        // Write beside the target first, so a half-written pack never replaces a good one.
+        const auto temp = target.getSiblingFile (target.getFileName() + ".part");
+        bool ok = false;
+        {
+            juce::FileOutputStream out (temp);
+            if (out.openedOk())
+            {
+                out.truncate();
+                double fraction = 0.0;
+                ok = zip.writeToStream (out, &fraction);
+                progress->store (1.0);
+            }
+        }
+        ok = ok && temp.moveFileTo (target);
+        if (! ok)
+            temp.deleteFile();
+
+        const auto size = target.getSize();
+        juce::MessageManager::callAsync ([safe, ok, target, missing, size, count = (int) entries.size()]
+        {
+            if (auto* self = safe.getComponent())
+            {
+                self->packProgress = nullptr;
+                if (ok)
+                {
+                    self->infoMessage = "Exported " + juce::String (count) + " samples to " + target.getFileName()
+                                      + " (" + juce::File::descriptionOfSizeInBytes (size) + ")"
+                                      + (missing > 0 ? " - " + juce::String (missing) + " missing samples left out" : juce::String())
+                                      + ". Plug-ins themselves must be installed on the other computer.";
+                    target.revealToUser();
+                }
+                else
+                {
+                    self->errorMessage = "Couldn't write " + target.getFullPathName();
+                }
+                self->repaint();
+            }
+        });
+    });
+}
+
+void MainComponent::openPack (const juce::File& pack)
+{
+    // Unpack into Music\Live Rig Sets\<name>, never over an existing folder.
+    const auto destination = juce::File::getSpecialLocation (juce::File::userMusicDirectory)
+                                 .getChildFile ("Live Rig Sets")
+                                 .getChildFile (pack.getFileNameWithoutExtension())
+                                 .getNonexistentSibling (true);
+    destination.createDirectory();
+
+    packProgress = std::make_shared<std::atomic<double>> (0.0);
+    infoMessage = "Unpacking " + pack.getFileName() + "...";
+    repaint();
+
+    juce::Component::SafePointer<MainComponent> safe (this);
+    loader.addJob ([safe, pack, destination]
+    {
+        juce::ZipFile zip (pack);
+        const bool ok = zip.getNumEntries() > 0 && zip.uncompressTo (destination, true).wasOk();
+
+        // The set file is the .liverig inside (in a folder named after the set).
+        juce::File setFile;
+        if (ok)
+            for (auto& f : destination.findChildFiles (juce::File::findFiles, true, juce::String ("*") + LiveSet::fileExtension))
+                setFile = f;
+
+        juce::MessageManager::callAsync ([safe, ok, setFile, destination, pack]
+        {
+            auto* self = safe.getComponent();
+            if (self == nullptr)
+                return;
+
+            self->packProgress = nullptr;
+            auto xml = setFile.existsAsFile() ? juce::XmlDocument::parse (setFile) : nullptr;
+
+            if (! ok || xml == nullptr || ! xml->hasTagName ("LiveRigSet"))
+            {
+                self->errorMessage = pack.getFileName() + " isn't a Live Rig pack (or couldn't be unpacked)";
+                self->repaint();
+                return;
+            }
+
+            self->stopAll (1.0);
+            self->liveSet.file = setFile;
+            self->loadSet (*xml, setFile.getParentDirectory());
+            self->infoMessage = "Opened " + self->liveSet.getName() + " - unpacked into " + setFile.getParentDirectory().getFullPathName();
+            self->repaint();
+        });
+    });
 }
 
 void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& baseFolder)

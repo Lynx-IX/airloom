@@ -105,6 +105,7 @@ struct LiveSet
 
     static constexpr int maxRows = 8;  // one per MidiMix fader
     static constexpr const char* fileExtension = ".liverig";
+    static constexpr const char* packExtension = ".liverigpack";   // a set and its samples in one file (a zip)
 
     static LiveSet makeDefault();
     static Row makeRow (const juce::String& name, bool oneShot, int numSlots = 4);

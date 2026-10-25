@@ -1,4 +1,5 @@
 build/
+Release/
 out/
 .vs/
 *.user
