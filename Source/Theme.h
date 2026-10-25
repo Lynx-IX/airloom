@@ -14,6 +14,27 @@ namespace Theme
     inline const juce::Colour warn        { 0xffe0a84f };   // amber: attention
     inline const juce::Colour danger      { 0xffe0605a };   // red: clipping / armed
 
+    // Row colours: soft, distinct hues that stay readable on the dark background.
+    constexpr int numRowColours = 8;
+    inline const juce::Colour rowColours[numRowColours] {
+        juce::Colour (0xff9b8cff),   // violet
+        juce::Colour (0xffa3c95f),   // green
+        juce::Colour (0xff5fa8e0),   // blue
+        juce::Colour (0xffe0a84f),   // amber
+        juce::Colour (0xffe07a9a),   // rose
+        juce::Colour (0xff5fc9c0),   // teal
+        juce::Colour (0xffe08a5f),   // coral
+        juce::Colour (0xffc9b58a),   // sand
+    };
+    inline const char* const rowColourNames[numRowColours] {
+        "Violet", "Green", "Blue", "Amber", "Rose", "Teal", "Coral", "Sand"
+    };
+
+    inline juce::Colour rowColour (int index)
+    {
+        return rowColours[(size_t) juce::jlimit (0, numRowColours - 1, index)];
+    }
+
     class LookAndFeel : public juce::LookAndFeel_V4
     {
     public:

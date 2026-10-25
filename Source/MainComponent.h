@@ -2,12 +2,21 @@
 
 #include <JuceHeader.h>
 #include "ChannelStrip.h"
+#include "FxPanel.h"
+#include "InputChannel.h"
+#include "InputsView.h"
+#include "InstrumentChannel.h"
 #include "LiveSet.h"
 #include "LoopChannel.h"
+#include "Looper.h"
 #include "MidiMap.h"
+#include "RowView.h"
+#include "SamplePool.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::FileDragAndDropTarget,
+                      public juce::DragAndDropContainer,
+                      public juce::DragAndDropTarget,
                       private juce::Timer,
                       private juce::ChangeListener,
                       private juce::MidiInputCallback
@@ -27,19 +36,15 @@ public:
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
-private:
-    static constexpr int numLoopChannels = 4;
-    enum Channel { pad1, pad2, nature, tones };
+    // Samples dragged from the pool, and channels dragged to a new place.
+    bool isInterestedInDragSource (const SourceDetails& details) override;
+    void itemDragMove (const SourceDetails& details) override;
+    void itemDragExit (const SourceDetails& details) override;
+    void itemDropped (const SourceDetails& details) override;
 
-    // What a channel is playing and what is cued to replace it on GO.
-    struct ChannelState
-    {
-        juce::File current;
-        std::optional<juce::File> cued;   // an empty File cues silence
-        LoopClipPtr cuedClip;             // loaded in the background once cued
-        bool loading = false;
-        int loadToken = 0;                // discards loads that were superseded
-    };
+private:
+    using Row = LiveSet::Row;
+    using Slot = LiveSet::Slot;
 
     // Audio device
     void openAudioDevice();
@@ -52,39 +57,90 @@ private:
     void openSet();
     void saveSet (bool asNewFolder);
     void saveSetTo (const juce::File& folder, bool moveFiles);
-    std::unique_ptr<juce::XmlElement> createSetXml (const juce::File& baseFolder) const;
-    void loadSetXml (const juce::XmlElement& xml, const juce::File& baseFolder);
+    void loadSet (const juce::XmlElement& xml, const juce::File& baseFolder);
     void saveSession();
 
-    // Keys
-    void addKey (std::function<void (int)> then = {});
-    void showKeyMenu (int index);
-    void deleteKey (int index);
-    void browseForPad (int keyIndex, int pad);
-    void assignPad (int keyIndex, int pad, const juce::File& file);
-    void rebuildKeyButtons();
+    // Rows and channels
+    void rebuildRows();
+    void layoutRows();
+    void updateRowViews();
+    void addRow (std::function<void (int)> then = {});
+    void showRowMenu (int row);
+    void removeRow (int row);
+    void addChannel (int row);
+    void showChannelMenu (int row, int slot);
+    void removeChannel (int row, int slot);
+    void moveChannel (int row, int slot, int delta);
+    void moveChannelTo (int slotId, int targetRow, int targetIndex);
+    RowView* rowViewAt (juce::Point<int> pos);
+    void clearDropMarkers();
+    void assignToChannels (int row, int firstSlot, const juce::Array<juce::File>& files);
+    void appendToRow (int row, const juce::Array<juce::File>& files);
+    void setRowMuted (int row, bool muted);
+    int freeEngine() const;
+    LoopChannel& engineFor (const Row& r)    { return *engines[(size_t) r.engine]; }
 
-    // Loading and cueing
+    // Live inputs and effects
+    void setupInputs();
+    void applyInput (int input);
+    void showInputMenu (int input);
+    void loadInputPlugin (int input, const juce::PluginDescription& description, const juce::String& state);
+    void removeInputPlugin (int input);
+    void openInputPluginEditor (int input);
+    juce::Array<juce::PluginDescription> effectTypes() const;
+    void showFxPanel (juce::Component& anchor, const juce::String& title, const FxSettings& fx, juce::Colour colour,
+                      std::function<void (const FxSettings&)> onChange);
+
+    // Hosted instruments
+    void updateSourceStrips();
+    void setupInstrumentStrip (int index, SourceStrip& strip);
+    void addInstrument();
+    void removeInstrument (int index);
+    void showInstrumentMenu (int index);
+    void loadInstrumentPlugin (int index, const juce::PluginDescription& description, const juce::String& state);
+    void openEditor (int index);
+    void closeEditor (int index);
+    void showPluginScanner();
+    void applyInstrument (int index);
+    void captureInstrumentStates();
+    void updateFireLights (bool allOff = false);
+    juce::Array<juce::PluginDescription> instrumentTypes() const;
+    juce::String instrumentName (int index) const;
+    juce::String instrumentDetail (int index) const;
+
+    // Loop recording
+    void recPressed();
+    void dubPressed();
+    void undoPressed();
+    void stopOverdubbing();
+    void setArmed (int input, bool armed);
+    bool anyArmed() const;
+    void collectFinishedTake();
+    int findOrCreateLiveLoopsRow();
+    void swapPlayingClip (Row& row, Slot& slot, LoopClipPtr clip);
+    void persistLiveClip (Slot& slot);
+    void updateLooperStatus();
+    juce::File recordingsFolder();
+
+    // Playing
+    void playPressed (int row, int slot);
+    void crossfadePressed (int row, int slot);
+    void startLoop (int row, int slot, bool fadeOutOthers);
+    void stopSlot (Row& row, Slot& slot);
+    void stopAll (double seconds);
+
+    // Samples
+    void addToPool (const juce::Array<juce::File>& files);
+    void showPoolMenu (const juce::Array<juce::File>& files);
+    void dropFilesAt (const juce::Array<juce::File>& files, juce::Point<int> pos, bool fromOutside);
     void browseForFiles (const juce::String& title, bool multiple, std::function<void (juce::Array<juce::File>)> onChosen);
-    void loadIntoChannel (int channel, const juce::Array<juce::File>& files);
-    void addToBin (int channel, const juce::Array<juce::File>& files);
-    void showFileMenu (int channel);
-    void cueKey (int index);
-    void stepCuedKey (int direction);
-    void cueFile (int channel, const juce::File& file);
-    void clearCue (int channel);
-    void clipLoaded (int channel, int token, LoopClipPtr clip, const juce::String& error);
-    int editingKey() const;
 
-    // Transport
-    void go();
-    void executeGo();
-    void toggleTransport();
-    void fadeOutAll (double seconds);
-    void setMuted (int channel, bool muted);
-    bool anyCued() const;
-    bool anyLoading() const;
-    void refreshUi();
+    // Clip loading: clips are read in the background and kept in memory. A
+    // smoothed (seamless-loop) version is cached separately from the plain one.
+    void withClip (const Slot& slot, std::function<void (LoopClipPtr)> then);
+    void clipLoaded (const juce::String& key, LoopClipPtr clip, const juce::String& error);
+    void preloadAll();
+    void trimCache (const juce::String& keep);
 
     // Dialogs
     void askText (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> onOk);
@@ -101,33 +157,71 @@ private:
     void saveMidiMap();
 
     void timerCallback() override;
+    void setZoom (float scale);
+    void setBpm (double bpm);
+    void tapTempo();
 
     juce::ApplicationProperties settings;
     juce::AudioFormatManager formatManager;
     juce::ThreadPool loader { juce::ThreadPoolOptions{}.withNumberOfThreads (2) };
 
     LiveSet liveSet;
-    std::array<std::unique_ptr<LoopChannel>, numLoopChannels> channels;
-    std::array<ChannelState, numLoopChannels> state;
-    int activeKey = -1, cuedKey = -1;
-    bool transportPlaying = false;
-    bool goPending = false;               // GO pressed while cued loops were still loading
-    bool restoring = false;               // suppresses autosave while a set is being loaded
+    std::array<std::unique_ptr<LoopChannel>, LiveSet::maxRows> engines;
+    std::array<std::unique_ptr<InputChannel>, LiveSet::numInputs> inputEngines;
+
+    juce::AudioPluginFormatManager pluginFormats;   // declared before the instruments, so it outlives them
+    juce::KnownPluginList knownPlugins;
+    std::array<std::unique_ptr<InstrumentChannel>, LiveSet::maxInstruments> instrumentEngines;
+    std::array<std::unique_ptr<juce::DocumentWindow>, LiveSet::maxInstruments> editorWindows;
+    std::array<std::unique_ptr<juce::DocumentWindow>, LiveSet::numInputs> inputPluginWindows;
+    std::array<bool, LiveSet::maxInstruments> instrumentLoading {};
+    int instrumentGeneration = 0;              // discards plugin loads meant for an earlier set
+    std::atomic<int> currentBlockSize { 512 };
+    juce::uint32 lastStateCapture = 0;
+    std::unique_ptr<juce::MidiOutput> fireOutput;
+    juce::AudioBuffer<float> inputCapture;   // audio thread: the interface inputs for this block
+    juce::AudioBuffer<float> recordBus;      // audio thread: armed inputs for the looper
+    std::atomic<int> deviceInputs { 0 };
+    std::atomic<int> roundTripLatency { 0 };
+    std::atomic<double> currentSampleRate { 48000.0 };
+    juce::int64 audioClock = 0;              // audio thread: samples processed since start
+
+    Looper looper;
+    int dubTargetId = -1;                    // the loop DUB records onto
+    int overdubSlotId = -1;                  // the loop being overdubbed right now
+    juce::int64 firstLoopLength = 0;         // for "Match first loop"
+    bool restoring = false;              // suppresses autosave while a set is being loaded
+
+    std::map<juce::String, LoopClipPtr> clipCache;
+    std::map<juce::String, std::vector<std::function<void (LoopClipPtr)>>> pendingLoads;
+    size_t cacheBytes = 0;
 
     std::atomic<float> masterTarget { 1.0f };
     juce::SmoothedValue<float> masterGain;
+    std::atomic<float> masterPeakL { 0.0f }, masterPeakR { 0.0f };
 
     // UI
-    std::array<std::unique_ptr<ChannelStrip>, numLoopChannels> strips;
+    SamplePool pool { formatManager };
+    juce::Viewport rowsViewport;
+    juce::Component rowsContent;
+    InputsView inputsView;
+    juce::OwnedArray<RowView> rowViews;
+    juce::TextButton addRowButton { "+ ROW" };
     ChannelStrip masterStrip { "Master", false };
-    juce::OwnedArray<RightClickable<juce::TextButton>> keyButtons;
-    juce::TextButton addKeyButton { "+ KEY" };
-    RightClickable<juce::TextButton> goButton { "GO" }, transportButton { "START" },
-                                     prevKeyButton { "< PREV" }, nextKeyButton { "NEXT >" };
+    RightClickable<juce::TextButton> stopAllButton { "STOP ALL" };
     juce::TextButton setButton { "Set" }, settingsButton { "Audio Settings" };
     juce::Slider fadeTimeSlider;
-    juce::Label fadeTimeLabel { {}, "Crossfade" };
-    juce::Rectangle<int> headerArea, keyDisplayArea, messageArea;
+    juce::Label fadeTimeLabel { {}, "Fade time" };
+    juce::Slider bpmSlider;
+    juce::Label bpmLabel { {}, "BPM" };
+    RightClickable<juce::TextButton> tapButton { "TAP" };
+    std::vector<double> tapTimes;   // recent TAP presses, in ms
+    BeatIndicator beatIndicator;
+    juce::int64 beatAnchor = 0;     // clock time of a beat 1 (set by TAP)
+
+    // Beats since the reference point: REC while recording, otherwise the last TAP.
+    double currentBeatPosition (bool& recording) const;
+    juce::Rectangle<int> headerArea, messageArea;
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     juce::String deviceStatus, midiStatus, errorMessage, infoMessage;

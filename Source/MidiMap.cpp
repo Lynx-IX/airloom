@@ -43,9 +43,10 @@ void MidiMap::setDefaults()
     }
 
     bind ("fader.master", { midiMixName, false, 62, 0 });
-    bind ("keyPrev",      { midiMixName, true, 25, 0 });   // BANK LEFT
-    bind ("keyNext",      { midiMixName, true, 26, 0 });   // BANK RIGHT
-    bind ("go",           { midiMixName, true, 27, 0 });   // SOLO
+
+    // The first two REC ARM buttons arm the two inputs.
+    bind ("arm.0", { midiMixName, true, 3, 0 });
+    bind ("arm.1", { midiMixName, true, 6, 0 });
 }
 
 void MidiMap::bind (const juce::String& target, MidiBinding binding)

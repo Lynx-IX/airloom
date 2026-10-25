@@ -41,7 +41,6 @@ public:
         fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 22);
         fader.setRange (-60.0, 6.0, 0.1);
         fader.setSkewFactorFromMidPoint (-12.0);
-        fader.setTextValueSuffix (" dB");
         fader.setDoubleClickReturnValue (true, 0.0);
         fader.textFromValueFunction = [] (double v) { return v <= -60.0 ? juce::String ("-inf") : juce::String (v, 1) + " dB"; };
         addAndMakeVisible (fader);
@@ -91,17 +90,47 @@ public:
         if (hardwarePos >= 0.0f)
         {
             // Small amber tick beside the fader: "move the MidiMix fader to here".
-            auto track = fader.getBounds().withTrimmedBottom (28).reduced (0, 10);
-            const float y = (float) track.getBottom() - hardwarePos * (float) track.getHeight();
             g.setColour (Theme::warn);
-            g.fillRect ((float) track.getX() - 2.0f, y - 1.5f, 10.0f, 3.0f);
+
+            if (horizontal)
+            {
+                auto track = fader.getBounds().withTrimmedRight (52).reduced (10, 0);
+                const float x = (float) track.getX() + hardwarePos * (float) track.getWidth();
+                g.fillRect (x - 1.5f, (float) track.getY() - 2.0f, 3.0f, 6.0f);
+            }
+            else
+            {
+                auto track = fader.getBounds().withTrimmedBottom (28).reduced (0, 10);
+                const float y = (float) track.getBottom() - hardwarePos * (float) track.getHeight();
+                g.fillRect ((float) track.getX() - 2.0f, y - 1.5f, 10.0f, 3.0f);
+            }
         }
+    }
+
+    // Lays the strip out sideways (fader, then mute) for short spaces such as a row header.
+    void setHorizontal (bool shouldBeHorizontal)
+    {
+        horizontal = shouldBeHorizontal;
+        fader.setSliderStyle (horizontal ? juce::Slider::LinearHorizontal : juce::Slider::LinearVertical);
+        fader.setTextBoxStyle (horizontal ? juce::Slider::TextBoxRight : juce::Slider::TextBoxBelow, false,
+                               horizontal ? 50 : 70, horizontal ? 20 : 22);
+        resized();
     }
 
     void resized() override
     {
         auto area = getLocalBounds().reduced (8);
-        titleArea = area.removeFromTop (24);
+
+        if (horizontal)
+        {
+            meter.setBounds (area.removeFromRight (14));
+            area.removeFromRight (4);
+            fader.setBounds (area.removeFromTop (26));
+            area.removeFromTop (6);
+            muteButton.setBounds (area.removeFromTop (26).withWidth (juce::jmin (area.getWidth(), 70)));
+            return;
+        }
+        titleArea = title.isNotEmpty() ? area.removeFromTop (24) : juce::Rectangle<int>();
 
         if (fileButton.isVisible())
         {
@@ -111,7 +140,6 @@ public:
         else
         {
             cuedArea = {};
-            area.removeFromTop (48);
         }
 
         muteButton.setBounds (area.removeFromBottom (34));
@@ -130,4 +158,5 @@ private:
     juce::String title, cuedText;
     juce::Rectangle<int> titleArea, cuedArea;
     float hardwarePos = -1.0f;
+    bool horizontal = false;
 };

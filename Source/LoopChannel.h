@@ -1,48 +1,77 @@
 #pragma once
 
+#include "Effects.h"
 #include "LoopPlayer.h"
 
-// A mixer channel holding one loop layer. It owns two players so a new clip
-// can crossfade in while the old one fades out.
+// The audio for one row. Every channel in the row that's sounding gets its own
+// voice with its own volume; loops repeat, one-shots stop by themselves.
+// Voices are tagged with their channel's id ("owner"). A channel can also have
+// its own effects: its voices are mixed into a separate buffer, run through
+// that channel's chain, then join the row (which has effects of its own).
 //
 // Thread model: everything except prepare() and process() is called from the
 // message thread.
 class LoopChannel
 {
 public:
-    explicit LoopChannel (juce::String channelName) : name (std::move (channelName)) {}
+    static constexpr int numLoopVoices = 16, numShotVoices = 8, numChannelFx = 6;
 
-    const juce::String& getName() const   { return name; }
+    LoopChannel();
 
     void prepare (double sampleRate, int maxBlockSize);
 
-    // Adds the channel's output into the buffer and reports its peak levels.
-    void process (juce::AudioBuffer<float>& out, int startSample, int numSamples, float& peakL, float& peakR);
+    // Adds the row's output into the buffer.
+    void process (juce::AudioBuffer<float>& out, int startSample, int numSamples);
 
     void setGain (float linearGain)   { targetGain = linearGain; }
     void setMuted (bool shouldMute)   { muted = shouldMute; }
-    bool isMuted() const              { return muted; }
 
-    // Swaps in a new clip (nullptr = silence). If audible, crossfades over the
-    // given time; otherwise swaps silently. Returns false if the channel is
-    // still busy finishing a previous crossfade.
-    bool changeClip (LoopClipPtr clip, double seconds, bool audible);
+    // Fades a loop in, phase-locked to 'anchor' on LoopPlayer::blockClock.
+    // Returns false if every voice is busy.
+    bool startLoop (int owner, LoopClipPtr clip, double seconds, float gain, juce::int64 anchor);
+    void stopLoop (int owner, double seconds);
+    bool isFadingIn (int owner) const;
 
-    void start (double fadeSeconds);
-    void stop (double fadeSeconds);
+    void triggerShot (int owner, LoopClipPtr clip, float gain);
 
-    bool isCrossfading() const        { return players[0].isAudible() && players[1].isAudible(); }
-    LoopClipPtr getClip() const       { return players[(size_t) active].getClip(); }
+    // Changes the volume of everything the owner is playing.
+    void setOwnerGain (int owner, float gain);
+
+    // Gives a channel its own effects (or removes them when nothing is on).
+    // Returns false if every per-channel effects slot in the row is taken.
+    bool setOwnerFx (int owner, const FxSettings& settings);
+
+    // Highest level the owner's voices reached since the last call (before effects and the row fader).
+    float takeOwnerPeak (int owner);
+
+    void stopAll (double seconds);
+
+    // The row's effects, applied to everything in it before the row fader.
+    FxChain& getFx()   { return fx; }
+
+    // Peak levels since the last call, for the meters.
+    std::pair<float, float> takePeaks()  { return { peakL.exchange (0.0f), peakR.exchange (0.0f) }; }
 
 private:
-    juce::String name;
-    std::array<LoopPlayer, 2> players;
-    int active = 0;                       // message thread only
+    int fxSlotFor (int owner) const;
 
-    juce::AudioBuffer<float> scratch;     // audio thread only
+    std::array<LoopPlayer, numLoopVoices> loops;
+    std::array<LoopPlayer, numShotVoices> shots;
+    // Written on the message thread, read by the audio thread to route each voice.
+    std::array<std::atomic<int>, numLoopVoices> loopOwners;
+    std::array<std::atomic<int>, numShotVoices> shotOwners;
+    std::array<std::atomic<int>, numChannelFx> fxOwners;
+    int nextShot = 0;                            // message thread only
+
+    std::array<FxChain, numChannelFx> channelFx;
+    std::array<juce::AudioBuffer<float>, numChannelFx> channelFxBuffers;   // audio thread only
+
+    FxChain fx;
+    juce::AudioBuffer<float> scratch;            // audio thread only
     juce::SmoothedValue<float> gain;
     std::atomic<float> targetGain { 1.0f };
     std::atomic<bool> muted { false };
+    std::atomic<float> peakL { 0.0f }, peakR { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LoopChannel)
 };

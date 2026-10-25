@@ -22,11 +22,16 @@ target_sources(LiveRig PRIVATE
     Source/LoopPlayer.cpp
     Source/LoopChannel.cpp
     Source/LiveSet.cpp
+    Source/Effects.cpp
+    Source/InputChannel.cpp
+    Source/Looper.cpp
+    Source/InstrumentChannel.cpp
     Source/MidiMap.cpp)
 
 target_compile_definitions(LiveRig PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST3=1
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LiveRig,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LiveRig,JUCE_VERSION>")
 

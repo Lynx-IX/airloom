@@ -15,7 +15,7 @@ struct MidiBinding
     juce::String describe() const;
 };
 
-// Maps MIDI controls to named targets such as "fader.0", "mute.2", "go".
+// Maps MIDI controls to named targets such as "fader.0", "mute.2", "stopAll".
 // Defaults match the Akai MidiMix factory layout; anything can be re-learned.
 class MidiMap
 {

@@ -1,38 +1,93 @@
 #include "LoopChannel.h"
 
+LoopChannel::LoopChannel()
+{
+    for (auto& o : loopOwners) o = -1;
+    for (auto& o : shotOwners) o = -1;
+    for (auto& o : fxOwners)   o = -1;
+}
+
 void LoopChannel::prepare (double sampleRate, int maxBlockSize)
 {
-    for (auto& p : players)
-        p.prepare (sampleRate);
+    for (auto& p : loops) p.prepare (sampleRate);
+    for (auto& p : shots) p.prepare (sampleRate);
 
-    scratch.setSize (2, juce::jmax (512, maxBlockSize));
+    const int size = juce::jmax (512, maxBlockSize);
+    fx.prepare (sampleRate, size);
+    scratch.setSize (2, size);
+
+    for (size_t k = 0; k < channelFx.size(); ++k)
+    {
+        channelFx[k].prepare (sampleRate, size);
+        channelFxBuffers[k].setSize (2, size);
+    }
+
     gain.reset (sampleRate, 0.05);
     gain.setCurrentAndTargetValue (muted ? 0.0f : targetGain.load());
 }
 
-void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int numSamples, float& peakL, float& peakR)
+int LoopChannel::fxSlotFor (int owner) const
 {
-    peakL = peakR = 0.0f;
+    if (owner < 0)
+        return -1;
+
+    for (int k = 0; k < (int) fxOwners.size(); ++k)
+        if (fxOwners[(size_t) k] == owner)
+            return k;
+    return -1;
+}
+
+void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int numSamples)
+{
     gain.setTargetValue (muted ? 0.0f : targetGain.load());
 
     const int outChannels = juce::jmin (out.getNumChannels(), scratch.getNumChannels());
+    float pl = 0.0f, pr = 0.0f;
 
     // The device may occasionally deliver a block larger than announced.
     for (int done = 0; done < numSamples;)
     {
         const int num = juce::jmin (numSamples - done, scratch.getNumSamples());
         scratch.clear (0, num);
+        for (auto& b : channelFxBuffers)
+            b.clear (0, num);
 
+        // Each voice goes to its channel's effects buffer if it has one, else straight to the row.
         bool sounding = false;
-        for (auto& p : players)
-            sounding |= p.process (scratch, 0, num);
+        std::array<bool, numChannelFx> fxSounding {};
 
-        if (! sounding)
+        auto route = [&] (LoopPlayer& p, int owner)
+        {
+            const int k = fxSlotFor (owner);
+            const bool s = p.process (k >= 0 ? channelFxBuffers[(size_t) k] : scratch, 0, num);
+            sounding |= s;
+            if (k >= 0) fxSounding[(size_t) k] |= s;
+        };
+
+        for (size_t i = 0; i < loops.size(); ++i) route (loops[i], loopOwners[i]);
+        for (size_t i = 0; i < shots.size(); ++i) route (shots[i], shotOwners[i]);
+
+        for (size_t k = 0; k < channelFx.size(); ++k)
+        {
+            if (fxOwners[k] < 0 || ! (fxSounding[k] || channelFx[k].needsTail()))
+                continue;
+
+            channelFx[k].process (channelFxBuffers[k], 0, num);
+            for (int ch = 0; ch < 2; ++ch)
+                scratch.addFrom (ch, 0, channelFxBuffers[k], ch, 0, num);
+            sounding = true;
+        }
+
+        // With effects on, keep going through silence so reverb and delay tails ring out.
+        if (! sounding && ! fx.needsTail())
         {
             gain.skip (num);
             done += num;
             continue;
         }
+
+        if (fx.isActive())
+            fx.process (scratch, 0, num);
 
         for (int i = 0; i < num; ++i)
         {
@@ -44,40 +99,134 @@ void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int n
         for (int ch = 0; ch < outChannels; ++ch)
             out.addFrom (ch, startSample + done, scratch, ch, 0, num);
 
-        peakL = juce::jmax (peakL, scratch.getMagnitude (0, 0, num));
-        peakR = juce::jmax (peakR, scratch.getMagnitude (1, 0, num));
+        pl = juce::jmax (pl, scratch.getMagnitude (0, 0, num));
+        pr = juce::jmax (pr, scratch.getMagnitude (1, 0, num));
         done += num;
     }
+
+    peakL = juce::jmax (peakL.load(), pl);
+    peakR = juce::jmax (peakR.load(), pr);
 }
 
-bool LoopChannel::changeClip (LoopClipPtr clip, double seconds, bool audible)
+bool LoopChannel::startLoop (int owner, LoopClipPtr clip, double seconds, float voiceGain, juce::int64 anchor)
 {
-    const int incoming = 1 - active;
-
-    // Replacing a clip that can still be heard would click.
-    if (players[(size_t) incoming].isAudible())
-        return false;
-
-    players[(size_t) incoming].setClip (std::move (clip));
-
-    if (audible)
+    // Use a voice nobody can hear: replacing an audible clip would click.
+    for (size_t i = 0; i < loops.size(); ++i)
     {
-        players[(size_t) incoming].fadeTo (1.0f, seconds);
-        players[(size_t) active].fadeTo (0.0f, seconds);
+        auto& p = loops[i];
+        if (p.isAudible())
+            continue;
+
+        loopOwners[i] = owner;
+        p.setLooping (true);
+        p.setVoiceGain (voiceGain, true);
+        p.setClip (std::move (clip), anchor);
+        p.fadeTo (1.0f, seconds);
+        return true;
     }
 
-    active = incoming;
+    return false;
+}
+
+void LoopChannel::stopLoop (int owner, double seconds)
+{
+    // The voice keeps its owner while it fades, so it stays in that channel's effects.
+    for (size_t i = 0; i < loops.size(); ++i)
+        if (loopOwners[i] == owner && loops[i].isAudible() && loops[i].getFadeTarget() > 0.0f)
+            loops[i].fadeTo (0.0f, seconds);
+}
+
+bool LoopChannel::isFadingIn (int owner) const
+{
+    for (size_t i = 0; i < loops.size(); ++i)
+        if (loopOwners[i] == owner && loops[i].getFadeTarget() > 0.0f && loops[i].getFadeLevel() < 0.999f)
+            return true;
+    return false;
+}
+
+void LoopChannel::triggerShot (int owner, LoopClipPtr clip, float voiceGain)
+{
+    // Prefer a free voice; otherwise take over the next one in turn.
+    int voice = -1;
+    for (int i = 0; i < (int) shots.size(); ++i)
+        if (! shots[(size_t) i].isAudible()) { voice = i; break; }
+
+    if (voice < 0)
+    {
+        voice = nextShot;
+        nextShot = (nextShot + 1) % (int) shots.size();
+    }
+
+    auto& p = shots[(size_t) voice];
+    shotOwners[(size_t) voice] = owner;
+    p.setLooping (false);
+    p.setVoiceGain (voiceGain, true);
+    p.setClip (std::move (clip));
+    p.fadeTo (1.0f, 0.0);
+}
+
+void LoopChannel::setOwnerGain (int owner, float voiceGain)
+{
+    for (size_t i = 0; i < loops.size(); ++i)
+        if (loopOwners[i] == owner && loops[i].getFadeTarget() > 0.0f)
+            loops[i].setVoiceGain (voiceGain);
+
+    for (size_t i = 0; i < shots.size(); ++i)
+        if (shotOwners[i] == owner)
+            shots[i].setVoiceGain (voiceGain);
+}
+
+bool LoopChannel::setOwnerFx (int owner, const FxSettings& settings)
+{
+    int slot = fxSlotFor (owner);
+
+    if (! settings.isActive())
+    {
+        if (slot >= 0)
+        {
+            channelFx[(size_t) slot].setSettings (settings);
+            fxOwners[(size_t) slot] = -1;
+        }
+        return true;
+    }
+
+    if (slot < 0)
+    {
+        for (int k = 0; k < (int) fxOwners.size() && slot < 0; ++k)
+            if (fxOwners[(size_t) k] < 0)
+                slot = k;
+
+        if (slot < 0)
+            return false;
+    }
+
+    channelFx[(size_t) slot].setSettings (settings);
+    fxOwners[(size_t) slot] = owner;
     return true;
 }
 
-void LoopChannel::start (double fadeSeconds)
+float LoopChannel::takeOwnerPeak (int owner)
 {
-    players[(size_t) active].fadeTo (1.0f, fadeSeconds);
+    float p = 0.0f;
+
+    for (size_t i = 0; i < loops.size(); ++i)
+        if (loopOwners[i] == owner)
+            p = juce::jmax (p, loops[i].takePeak());
+
+    for (size_t i = 0; i < shots.size(); ++i)
+        if (shotOwners[i] == owner)
+            p = juce::jmax (p, shots[i].takePeak());
+
+    return p;
 }
 
-void LoopChannel::stop (double fadeSeconds)
+void LoopChannel::stopAll (double seconds)
 {
-    for (auto& p : players)
+    for (auto& p : loops)
         if (p.isAudible())
-            p.fadeTo (0.0f, fadeSeconds);
+            p.fadeTo (0.0f, seconds);
+
+    for (auto& p : shots)
+        if (p.isAudible())
+            p.fadeTo (0.0f, seconds);
 }
