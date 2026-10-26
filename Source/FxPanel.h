@@ -45,15 +45,15 @@ public:
 
         syncButton.setButtonText ("Sync to BPM");
         syncButton.setToggleState (settings.delaySync, juce::dontSendNotification);
-        syncButton.onClick = [this] { settings.delaySync = syncButton.getToggleState(); updateDelayControls(); changed(); };
+        syncButton.onClick = [this] { settings.delaySync = syncButton.getToggleState(); switchOn (*delaySection); updateDelayControls(); changed(); };
         pingPongButton.setButtonText ("Ping-pong");
         pingPongButton.setToggleState (settings.delayPingPong, juce::dontSendNotification);
-        pingPongButton.onClick = [this] { settings.delayPingPong = pingPongButton.getToggleState(); changed(); };
+        pingPongButton.onClick = [this] { settings.delayPingPong = pingPongButton.getToggleState(); switchOn (*delaySection); changed(); };
 
         for (int i = 0; i < numDelayDivisions; ++i)
             divisionBox.addItem (delayDivisions[i].name, i + 1);
         divisionBox.setSelectedId (settings.delayDivision + 1, juce::dontSendNotification);
-        divisionBox.onChange = [this] { settings.delayDivision = divisionBox.getSelectedId() - 1; changed(); };
+        divisionBox.onChange = [this] { settings.delayDivision = divisionBox.getSelectedId() - 1; switchOn (*delaySection); changed(); };
 
         for (auto* c : std::initializer_list<juce::Component*> { &syncButton, &pingPongButton, &divisionBox })
             addAndMakeVisible (c);
@@ -68,7 +68,7 @@ public:
         addKnob (reverb, "Movement", &F::reverbMod, 0.0, 1.0, 0.01, formatPercent);
         addKnob (reverb, "Mix", &F::reverbMix, 0.0, 1.0, 0.01, formatPercent);
 
-        updateDelayControls();
+        updateLooks();
         setSize (900, 360);
     }
 
@@ -82,7 +82,7 @@ public:
 
         g.setColour (Theme::textDim);
         g.setFont (juce::FontOptions (12.0f));
-        g.drawText ("Signal flows left to right, top row then bottom row. Double-click a knob to reset it.",
+        g.drawText ("Tick a section (or turn its knobs) to switch it on. Double-click a knob to reset it.",
                     getLocalBounds().removeFromTop (34).reduced (14, 0), juce::Justification::centredRight);
 
         for (auto* s : sections)
@@ -116,6 +116,7 @@ private:
     {
         juce::String name;
         std::unique_ptr<juce::ToggleButton> toggle;
+        bool FxSettings::* onFlag = nullptr;
         juce::OwnedArray<juce::Slider> knobs;
         juce::OwnedArray<juce::Label> labels;
         juce::Rectangle<int> area;
@@ -142,7 +143,8 @@ private:
             s->toggle = std::make_unique<juce::ToggleButton> (name);
             s->toggle->setToggleState (settings.*onFlag, juce::dontSendNotification);
             s->toggle->setColour (juce::ToggleButton::tickColourId, accent);
-            s->toggle->onClick = [this, s, onFlag] { settings.*onFlag = s->toggle->getToggleState(); changed(); };
+            s->onFlag = onFlag;
+            s->toggle->onClick = [this, s, onFlag] { settings.*onFlag = s->toggle->getToggleState(); updateLooks(); changed(); };
             addAndMakeVisible (*s->toggle);
         }
 
@@ -168,7 +170,7 @@ private:
         knob->textFromValueFunction = format;
         knob->setDoubleClickReturnValue (true, FxSettings{}.*member);
         knob->setValue (settings.*member, juce::dontSendNotification);
-        knob->onValueChange = [this, knob, member] { settings.*member = knob->getValue(); changed(); };
+        knob->onValueChange = [this, &s, knob, member] { settings.*member = knob->getValue(); switchOn (s); changed(); };
         addAndMakeVisible (knob);
         return *knob;
     }
@@ -218,12 +220,43 @@ private:
         }
     }
 
+    // Turning a knob means you want to hear it: switch its section on if it was off.
+    void switchOn (Section& s)
+    {
+        if (s.onFlag == nullptr || settings.*(s.onFlag))
+            return;
+
+        settings.*(s.onFlag) = true;
+        s.toggle->setToggleState (true, juce::dontSendNotification);
+        updateLooks();
+    }
+
+    // Sections that are off fade back, so it's obvious they aren't doing anything.
+    void updateLooks()
+    {
+        for (auto* s : sections)
+        {
+            const float alpha = (s->onFlag == nullptr || settings.*(s->onFlag)) ? 1.0f : 0.4f;
+            for (auto* k : s->knobs)  k->setAlpha (alpha);
+            for (auto* l : s->labels) l->setAlpha (alpha);
+        }
+
+        const float delayAlpha = settings.delayOn ? 1.0f : 0.4f;
+        for (auto* c : std::initializer_list<juce::Component*> { &syncButton, &pingPongButton, &divisionBox })
+            c->setAlpha (delayAlpha);
+
+        updateDelayControls();
+    }
+
     void updateDelayControls()
     {
         // Synced: pick a note length. Free: set the time in milliseconds.
         divisionBox.setEnabled (settings.delaySync);
         timeKnob->setEnabled (! settings.delaySync);
-        timeKnob->setAlpha (settings.delaySync ? 0.35f : 1.0f);
+        if (settings.delaySync)
+            timeKnob->setAlpha (0.35f);
+        else
+            timeKnob->setAlpha (settings.delayOn ? 1.0f : 0.4f);
     }
 
     void changed()

@@ -488,6 +488,27 @@ namespace FxSelfTest
                         const float mixer = play (30);
                         check (mixer < 0.01f, "MidiMix notes are ignored by instruments (peak " + juce::String (mixer, 4) + ")");
 
+                        // Delay and reverb on the instrument channel: a short note should keep ringing after release.
+                        auto tailAfterNote = [&] (const FxSettings& fx, double at)
+                        {
+                            channel.getFx().setSettings (fx);
+                            play (400);   // let everything die away
+                            channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOn (1, 54 + 48, (juce::uint8) 110).withTimeStamp (at));
+                            play (10);
+                            channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOff (1, 54 + 48).withTimeStamp (at + 0.05));
+                            play (100);   // past Vital's own release
+                            return play (60);
+                        };
+
+                        const float dryTail = tailAfterNote ({}, now + 10.0);
+                        FxSettings wetFx;
+                        wetFx.delayOn = wetFx.reverbOn = true;
+                        wetFx.reverbDecay = 6.0;
+                        const float wetTail = tailAfterNote (wetFx, now + 20.0);
+                        check (wetTail > 0.001f && wetTail > dryTail * 4.0f,
+                               "Instrument channel delay + reverb ring on after the note (tail " + juce::String (wetTail, 4)
+                                   + ", dry " + juce::String (dryTail, 4) + ")");
+
                         channel.takePlugin();
                     }
                 }
