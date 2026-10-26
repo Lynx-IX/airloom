@@ -91,6 +91,11 @@ private:
 
     // Live inputs and effects
     void setupInputs();
+    void setupInputStrip (int input, SourceStrip& strip);
+    void addInput();
+    void removeInput (int input);
+    void openAllInputChannels();
+    juce::String inputsOpenedFor;   // the device openAllInputChannels() last tried
     void applyInput (int input);
     void showInputMenu (int input);
     void loadInputPlugin (int input, const juce::PluginDescription& description, const juce::String& state);
@@ -141,7 +146,16 @@ private:
     void playPressed (int row, int slot);
     void crossfadePressed (int row, int slot);
     void startLoop (int row, int slot, bool fadeOutOthers);
-    void stopSlot (Row& row, Slot& slot);
+    void stopSlot (Row& row, Slot& slot, juce::int64 startAt = -1);
+
+    // When a loop pressed now comes in: straight away, or on the next beat or bar of the
+    // tempo grid (counted from the last TAP, SYNC or the first loop to start).
+    juce::int64 nextLoopStart();
+
+    // When REC starts recording: now, or (with Start on beat or bar) on the next bar line at
+    // least a beat away, so the beat lights and the Fire count you in. -1 = now.
+    juce::int64 nextRecordStart();
+    bool anyLoopPlaying() const;
     void stopAll (double seconds);
 
     // Samples
@@ -182,13 +196,15 @@ private:
 
     LiveSet liveSet;
     std::array<std::unique_ptr<LoopChannel>, LiveSet::maxRows> engines;
-    std::array<std::unique_ptr<InputChannel>, LiveSet::numInputs> inputEngines;
+    std::array<std::unique_ptr<InputChannel>, LiveSet::maxInputs> inputEngines;
+    std::atomic<int> activeInputs { 0 };   // how many of them the audio thread runs
+    int inputGeneration = 0;               // discards input plug-in loads meant for an earlier set or layout
 
     juce::AudioPluginFormatManager pluginFormats;   // declared before the instruments, so it outlives them
     juce::KnownPluginList knownPlugins;
     std::array<std::unique_ptr<InstrumentChannel>, LiveSet::maxInstruments> instrumentEngines;
     std::array<std::unique_ptr<juce::DocumentWindow>, LiveSet::maxInstruments> editorWindows;
-    std::array<std::unique_ptr<juce::DocumentWindow>, LiveSet::numInputs> inputPluginWindows;
+    std::array<std::unique_ptr<juce::DocumentWindow>, LiveSet::maxInputs> inputPluginWindows;
     std::array<bool, LiveSet::maxInstruments> instrumentLoading {};
     int instrumentGeneration = 0;              // discards plugin loads meant for an earlier set
     std::atomic<int> currentBlockSize { 512 };
@@ -264,6 +280,12 @@ private:
     juce::Slider bpmSlider;
     juce::Label bpmLabel { {}, "BPM" };
     RightClickable<juce::TextButton> tapButton { "TAP" };
+    RightClickable<juce::TextButton> syncButton { "SYNC" };
+    juce::ComboBox loopStartBox;
+
+    // Puts every playing loop back in phase: with the one that's been playing longest
+    // (the one being overdubbed, if any), or with 'restart' all from the top together now.
+    void syncLoops (bool restart);
 
     // Set timer: how long the performance has been going.
     RightClickable<juce::TextButton> setTimerButton { "START" };

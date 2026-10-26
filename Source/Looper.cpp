@@ -10,14 +10,21 @@ void Looper::prepare (double newSampleRate, double maxSeconds)
     dubTarget = nullptr;
 }
 
-bool Looper::startRecording()
+bool Looper::startRecording (juce::int64 at)
 {
     if (getState() == State::finished)
         return false;
 
     dubTarget = nullptr;
+    startAt = at;
+    cancelRequested = false;
     startRequested = true;
     return true;
+}
+
+void Looper::cancelStart()
+{
+    cancelRequested = true;
 }
 
 void Looper::stopRecording (juce::int64 unitSamples)
@@ -81,13 +88,33 @@ void Looper::finishAt (int newLoopLength)
 
 void Looper::process (const juce::AudioBuffer<float>& bus, int numSamples, juce::int64 clock, int latencySamples)
 {
-    if (startRequested.exchange (false))
+    if (cancelRequested.exchange (false))
     {
-        stopRequested = false;
-        length = loopLength = 0;
-        targetLength = 0;
-        takeStart = clock;
-        state = (int) State::recording;
+        startRequested = false;
+        if (getState() == State::waiting)
+            state = (int) State::idle;
+    }
+
+    // A start in this block begins part-way into it; a later one waits.
+    int skip = 0;
+    if (startRequested)
+    {
+        const auto at = startAt.load();
+
+        if (at >= clock + numSamples)
+        {
+            state = (int) State::waiting;
+        }
+        else
+        {
+            startRequested = false;
+            skip = at > clock ? (int) (at - clock) : 0;
+            stopRequested = false;
+            length = loopLength = 0;
+            targetLength = 0;
+            takeStart = clock + skip;
+            state = (int) State::recording;
+        }
     }
 
     if (getState() == State::recording && stopRequested.exchange (false))
@@ -114,10 +141,10 @@ void Looper::process (const juce::AudioBuffer<float>& bus, int numSamples, juce:
     {
         const int start = length;
         const int limit = current == State::finishing ? targetLength : take.getNumSamples() - seamSamples;
-        const int n = juce::jmax (0, juce::jmin (numSamples, limit - start));
+        const int n = juce::jmax (0, juce::jmin (numSamples - skip, limit - start));
 
         for (int ch = 0; ch < 2; ++ch)
-            take.copyFrom (ch, start, bus, ch % bus.getNumChannels(), 0, n);
+            take.copyFrom (ch, start, bus, ch % bus.getNumChannels(), skip, n);
 
         length = start + n;
 

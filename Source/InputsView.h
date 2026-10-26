@@ -148,12 +148,12 @@ public:
     static inline const juce::Colour colour { 0xffe07a9a };            // rose: live inputs and recorded loops
     static inline const juce::Colour instrumentColour { 0xff5fc9c0 };  // teal: hosted instruments
 
-    std::array<std::unique_ptr<SourceStrip>, LiveSet::numInputs> inputStrips;
+    juce::OwnedArray<SourceStrip> inputStrips;
     juce::OwnedArray<SourceStrip> instrumentStrips;
-    juce::TextButton addInstrumentButton { "+ INSTRUMENT" };
+    juce::TextButton addInputButton { "+ INPUT" }, addInstrumentButton { "+ INSTRUMENT" };
 
-    // Called whenever instrument strips are created, so the owner can wire them up.
-    std::function<void (int index, SourceStrip&)> onInstrumentStripCreated;
+    // Called whenever input or instrument strips are created, so the owner can wire them up.
+    std::function<void (int index, SourceStrip&)> onInputStripCreated, onInstrumentStripCreated;
     std::function<void()> onLayoutChanged;
     ColumnResizer resizer;   // its onColumnsChanged is set by the owner
     juce::Point<int> grabOffset;   // where in the group the mouse picked it up
@@ -196,11 +196,9 @@ public:
             return juce::jlimit (1, juce::jmax (1, getNumStrips()), fitting);
         };
 
-        for (auto& s : inputStrips)
-        {
-            s = std::make_unique<SourceStrip> ("MON", "Monitor: hear this input through the speakers. Off by default so a mic can't feed back.");
-            content.addAndMakeVisible (*s);
-        }
+        addAndMakeVisible (addInputButton);
+        addInputButton.setTooltip ("Add another input from the audio interface (up to 8)");
+        addInputButton.setWantsKeyboardFocus (false);
 
         addAndMakeVisible (addInstrumentButton);
         addInstrumentButton.setTooltip ("Host a VST3 instrument, played from the Fire's pads or any keyboard");
@@ -211,10 +209,27 @@ public:
     void update (const LiveSet& set, const std::function<juce::String (int)>& instrumentName,
                  const std::function<juce::String (int)>& instrumentDetail)
     {
-        for (size_t i = 0; i < inputStrips.size(); ++i)
+        if (inputStrips.size() != (int) set.inputs.size())
         {
-            const auto& in = set.inputs[i];
-            const auto source = juce::String (in.source == 0 ? "In 1" : in.source == 1 ? "In 2" : "In 1+2 stereo");
+            inputStrips.clear();
+            for (int i = 0; i < (int) set.inputs.size(); ++i)
+            {
+                auto* s = inputStrips.add (new SourceStrip ("MON", "Monitor: hear this input through the speakers. Off by default so a mic can't feed back."));
+                content.addAndMakeVisible (s);
+                s->strip.fader.setValue (set.inputs[(size_t) i].faderDb, juce::dontSendNotification);
+                s->strip.muteButton.setToggleState (set.inputs[(size_t) i].muted, juce::dontSendNotification);
+                if (onInputStripCreated)
+                    onInputStripCreated (i, *s);
+            }
+            if (onLayoutChanged)
+                onLayoutChanged();
+            resized();
+        }
+
+        for (int i = 0; i < inputStrips.size(); ++i)
+        {
+            const auto& in = set.inputs[(size_t) i];
+            const auto source = "In " + juce::String (in.channel + 1) + (in.stereo ? "+" + juce::String (in.channel + 2) + " stereo" : juce::String());
             const auto plugin = in.insertName.isNotEmpty() ? "  -  " + in.insertName : juce::String();
             inputStrips[i]->setContent (in.name, source + plugin + (in.recordWithFx ? juce::String() : "  -  records dry"),
                                         in.monitor, in.armed, in.fx.anyOn(), colour);
@@ -242,6 +257,7 @@ public:
                                              instrumentColour);
         }
 
+        addInputButton.setEnabled ((int) set.inputs.size() < LiveSet::maxInputs);
         addInstrumentButton.setEnabled ((int) set.instruments.size() < LiveSet::maxInstruments);
     }
 
@@ -296,8 +312,12 @@ public:
         area.removeFromLeft (headerWidth);
 
         auto titleBar = area.removeFromTop (titleHeight - 4);
-        addInstrumentButton.setButtonText (titleBar.getWidth() >= 230 ? "+ INSTRUMENT" : "+ INST");
-        addInstrumentButton.setBounds (titleBar.removeFromRight (titleBar.getWidth() >= 230 ? 124 : 72));
+        const bool roomy = titleBar.getWidth() >= 320;
+        addInstrumentButton.setButtonText (roomy ? "+ INSTRUMENT" : "+ INST");
+        addInstrumentButton.setBounds (titleBar.removeFromRight (roomy ? 124 : 56));
+        titleBar.removeFromRight (4);
+        addInputButton.setButtonText (roomy ? "+ INPUT" : "+ IN");
+        addInputButton.setBounds (titleBar.removeFromRight (roomy ? 84 : 44));
         titleArea = titleBar.withTrimmedLeft (4);
         area.removeFromTop (4);
 

@@ -167,6 +167,7 @@ MainComponent::MainComponent()
     rowsViewport.setScrollBarsShown (true, false);
     rowsViewport.setScrollBarThickness (10);
     rowsContent.addAndMakeVisible (inputsView);
+    inputsView.onInputStripCreated = [this] (int i, SourceStrip& s) { setupInputStrip (i, s); };
     inputsView.onInstrumentStripCreated = [this] (int i, SourceStrip& s) { setupInstrumentStrip (i, s); };
     inputsView.onLayoutChanged = [this] { layoutRows(); };
     inputsView.resizer.onColumnsChanged = [this] (int columns)
@@ -175,6 +176,7 @@ MainComponent::MainComponent()
         layoutRows();
         saveSession();
     };
+    inputsView.addInputButton.onClick = [this] { addInput(); };
     inputsView.addInstrumentButton.onClick = [this] { addInstrument(); };
     setupInputs();
     addAndMakeVisible (addRowButton);
@@ -264,6 +266,37 @@ MainComponent::MainComponent()
     tapButton.setTooltip ("Tap along to set the tempo");
     tapButton.onClick = [this] { tapTempo(); };
     tapButton.onRightClick = [this] { showLearnMenu ("tap", "Tap tempo"); };
+
+    addAndMakeVisible (loopStartBox);
+    loopStartBox.addItem ("Start: now", 1);
+    loopStartBox.addItem ("Start: beat", 2);
+    loopStartBox.addItem ("Start: bar", 3);
+    loopStartBox.setWantsKeyboardFocus (false);
+    loopStartBox.setTooltip ("When a loop you press comes in: straight away, or on the next beat or bar at the BPM, "
+                             "in time with the loops already playing");
+    loopStartBox.setSelectedId (1, juce::dontSendNotification);
+    loopStartBox.onChange = [this]
+    {
+        liveSet.loopStart = (LiveSet::LoopStart) (loopStartBox.getSelectedId() - 1);
+        saveSession();
+    };
+
+    addAndMakeVisible (syncButton);
+    syncButton.setWantsKeyboardFocus (false);
+    syncButton.setTooltip ("Loops drifted apart? Lines every playing loop back up with the one that's been playing longest. "
+                           "Right-click to restart them all from the top together.");
+    syncButton.onClick = [this] { syncLoops (false); };
+    syncButton.onRightClick = [this]
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Restart all loops together from the top");
+        m.addItem (2, "Assign MIDI button...");
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&syncButton), [this] (int r)
+        {
+            if (r == 1) syncLoops (true);
+            if (r == 2) showLearnMenu ("sync", "Sync loops");
+        });
+    };
     addAndMakeVisible (beatIndicator);
 
     disableKeyboardFocus (*this);
@@ -318,10 +351,10 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::openAudioDevice()
 {
-    // Open two inputs now so later stages (live mic / instrument) can use them.
+    // Every interface input is opened (see openAllInputChannels), so any input strip can use any of them.
     // With no saved choice this opens the Windows default device.
     std::unique_ptr<juce::XmlElement> saved (settings.getUserSettings()->getXmlValue ("audioDevice"));
-    setAudioChannels (2, 2, saved.get());
+    setAudioChannels (LiveSet::maxDeviceInputs, 2, saved.get());
 
     deviceManager.addChangeListener (this);
     changeListenerCallback (&deviceManager);
@@ -329,7 +362,7 @@ void MainComponent::openAudioDevice()
 
 void MainComponent::showDeviceSettings()
 {
-    auto* selector = new juce::AudioDeviceSelectorComponent (deviceManager, 0, 2, 0, 2,
+    auto* selector = new juce::AudioDeviceSelectorComponent (deviceManager, 0, LiveSet::maxDeviceInputs, 0, 2,
                                                              false, false, true, false);
     selector->setSize (520, 420);
 
@@ -372,6 +405,28 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
         settings.getUserSettings()->setValue ("audioDevice", xml.get());
 
     repaint();
+    openAllInputChannels();
+}
+
+void MainComponent::openAllInputChannels()
+{
+    // Every interface input (up to 16) is opened, so an input strip can take any of them.
+    // Tried once per device, in case a driver won't open them all.
+    auto* device = deviceManager.getCurrentAudioDevice();
+    if (device == nullptr)
+        return;
+
+    juce::BigInteger all;
+    all.setRange (0, juce::jmin (LiveSet::maxDeviceInputs, device->getInputChannelNames().size()), true);
+    const auto key = device->getName() + "/" + juce::String (all.countNumberOfSetBits());
+    if (device->getActiveInputChannels() == all || inputsOpenedFor == key)
+        return;
+
+    inputsOpenedFor = key;
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.useDefaultInputChannels = false;
+    setup.inputChannels = all;
+    deviceManager.setAudioDeviceSetup (setup, true);
 }
 
 //==============================================================================
@@ -385,7 +440,7 @@ void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRat
         e->prepare (sampleRate, samplesPerBlockExpected);
     currentBlockSize = samplesPerBlockExpected;
 
-    inputCapture.setSize (2, juce::jmax (4096, samplesPerBlockExpected));
+    inputCapture.setSize (LiveSet::maxDeviceInputs, juce::jmax (4096, samplesPerBlockExpected));
     recordBus.setSize (2, juce::jmax (4096, samplesPerBlockExpected));
     looper.prepare (sampleRate);
     currentSampleRate = sampleRate;
@@ -416,8 +471,8 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
     info.clearActiveBufferRegion();
     recordBus.clear (0, juce::jmin (inputSamples, recordBus.getNumSamples()));
 
-    for (auto& in : inputEngines)
-        in->process (inputCapture, numIn, buffer, info.startSample, inputSamples, recordBus);
+    for (int i = 0; i < juce::jmin (activeInputs.load(), LiveSet::maxInputs); ++i)
+        inputEngines[(size_t) i]->process (inputCapture, numIn, buffer, info.startSample, inputSamples, recordBus);
     for (auto& inst : instrumentEngines)
         inst->process (buffer, info.startSample, info.numSamples, recordBus);
 
@@ -532,10 +587,13 @@ void MainComponent::tapTempo()
 double MainComponent::currentBeatPosition (bool& recording) const
 {
     const auto state = looper.getState();
-    recording = state == Looper::State::recording || state == Looper::State::finishing;
+    const bool taking = state == Looper::State::recording || state == Looper::State::finishing;
+    recording = taking || state == Looper::State::waiting;   // the count-in shows red too
 
+    // While recording, beats count from where the performer played the first note
+    // (the input reaches the looper a round trip after the sound they played along to).
     const double samplesPerBeat = 60.0 / liveSet.bpm * currentSampleRate;
-    const auto from = recording ? looper.getTakeStart() : beatAnchor;
+    const auto from = taking ? looper.getTakeStart() - roundTripLatency : beatAnchor;
     return (double) juce::jmax ((juce::int64) 0, LoopPlayer::blockClock.load() - from) / samplesPerBeat;
 }
 
@@ -916,13 +974,14 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
 
     // Unload the previous set's instruments; any loads still in flight are ignored.
     ++instrumentGeneration;
+    ++inputGeneration;
     for (int i = 0; i < LiveSet::maxInstruments; ++i)
     {
         closeEditor (i);
         instrumentEngines[(size_t) i]->takePlugin();
         instrumentLoading[(size_t) i] = false;
     }
-    for (int i = 0; i < LiveSet::numInputs; ++i)
+    for (int i = 0; i < LiveSet::maxInputs; ++i)
     {
         inputPluginWindows[(size_t) i].reset();
         inputEngines[(size_t) i]->setInsert (nullptr);
@@ -939,6 +998,7 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
     masterStrip.fader.setValue (liveSet.masterDb);
     masterTarget = dbToGain (liveSet.masterDb);
     fadeTimeSlider.setValue (liveSet.fadeSeconds);
+    loopStartBox.setSelectedId ((int) liveSet.loopStart + 1, juce::dontSendNotification);
     bpmSlider.setValue (liveSet.bpm, juce::dontSendNotification);
     looperBar.lengthBox.setSelectedId ((int) liveSet.loopLength + 1, juce::dontSendNotification);
     looper.stopOverdub();
@@ -947,7 +1007,7 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
     FxChain::tempoBpm = liveSet.bpm;
     pool.setFiles (liveSet.pool);
 
-    for (int i = 0; i < LiveSet::numInputs; ++i)
+    for (int i = 0; i < (int) liveSet.inputs.size(); ++i)
     {
         applyInput (i);
 
@@ -1644,53 +1704,53 @@ void MainComponent::setRowMuted (int row, bool muted)
 }
 
 //==============================================================================
+void MainComponent::setupInputStrip (int i, SourceStrip& s)
+{
+    const auto faderTarget = "inputFader." + juce::String (i);
+
+    s.strip.fader.onValueChange = [this, i]
+    {
+        auto& in = liveSet.inputs[(size_t) i];
+        in.faderDb = inputsView.inputStrips[i]->strip.fader.getValue();
+        inputEngines[(size_t) i]->setGain (dbToGain (in.faderDb));
+        saveSession();
+    };
+    s.strip.fader.onDragStart = [this, faderTarget] { takeover[faderTarget].locked = false; };
+    s.strip.fader.onRightClick = [this, faderTarget, i] { showLearnMenu (faderTarget, liveSet.inputs[(size_t) i].name + " fader"); };
+
+    s.strip.muteButton.onClick = [this, i]
+    {
+        liveSet.inputs[(size_t) i].muted = inputsView.inputStrips[i]->strip.muteButton.getToggleState();
+        applyInput (i);
+        saveSession();
+    };
+    s.strip.muteButton.onRightClick = [this, i] { showLearnMenu ("inputMute." + juce::String (i), liveSet.inputs[(size_t) i].name + " mute"); };
+
+    s.onFirstButton = [this, i]
+    {
+        liveSet.inputs[(size_t) i].monitor = ! liveSet.inputs[(size_t) i].monitor;
+        applyInput (i);
+        saveSession();
+    };
+
+    s.onFx = [this, i]
+    {
+        const auto& in = liveSet.inputs[(size_t) i];
+        showFxPanel (*inputsView.inputStrips[i], in.name, in.fx, InputsView::colour, [this, i] (const FxSettings& fx)
+        {
+            liveSet.inputs[(size_t) i].fx = fx;
+            applyInput (i);
+            saveSession();
+        });
+    };
+
+    s.onMenu = [this, i] { showInputMenu (i); };
+    s.onArm = [this, i] { setArmed (i, ! liveSet.inputs[(size_t) i].armed); };
+    disableKeyboardFocus (s);
+}
+
 void MainComponent::setupInputs()
 {
-    for (int i = 0; i < LiveSet::numInputs; ++i)
-    {
-        auto& s = *inputsView.inputStrips[(size_t) i];
-        const auto faderTarget = "inputFader." + juce::String (i);
-
-        s.strip.fader.onValueChange = [this, i]
-        {
-            auto& in = liveSet.inputs[(size_t) i];
-            in.faderDb = inputsView.inputStrips[(size_t) i]->strip.fader.getValue();
-            inputEngines[(size_t) i]->setGain (dbToGain (in.faderDb));
-            saveSession();
-        };
-        s.strip.fader.onDragStart = [this, faderTarget] { takeover[faderTarget].locked = false; };
-        s.strip.fader.onRightClick = [this, faderTarget, i] { showLearnMenu (faderTarget, liveSet.inputs[(size_t) i].name + " fader"); };
-
-        s.strip.muteButton.onClick = [this, i]
-        {
-            liveSet.inputs[(size_t) i].muted = inputsView.inputStrips[(size_t) i]->strip.muteButton.getToggleState();
-            applyInput (i);
-            saveSession();
-        };
-        s.strip.muteButton.onRightClick = [this, i] { showLearnMenu ("inputMute." + juce::String (i), liveSet.inputs[(size_t) i].name + " mute"); };
-
-        s.onFirstButton = [this, i]
-        {
-            liveSet.inputs[(size_t) i].monitor = ! liveSet.inputs[(size_t) i].monitor;
-            applyInput (i);
-            saveSession();
-        };
-
-        s.onFx = [this, i]
-        {
-            const auto& in = liveSet.inputs[(size_t) i];
-            showFxPanel (*inputsView.inputStrips[(size_t) i], in.name, in.fx, InputsView::colour, [this, i] (const FxSettings& fx)
-            {
-                liveSet.inputs[(size_t) i].fx = fx;
-                applyInput (i);
-                saveSession();
-            });
-        };
-
-        s.onMenu = [this, i] { showInputMenu (i); };
-        s.onArm = [this, i] { setArmed (i, ! liveSet.inputs[(size_t) i].armed); };
-    }
-
     looperBar.recButton.onClick = [this] { recPressed(); };
     looperBar.recButton.onRightClick = [this] { showLearnMenu ("rec", "Record"); };
     looperBar.dubButton.onClick = [this] { dubPressed(); };
@@ -1714,28 +1774,125 @@ void MainComponent::applyInput (int i)
     engine.setGain (dbToGain (in.faderDb));
     engine.setMuted (in.muted);
     engine.setMonitor (in.monitor);
-    engine.setSource (in.source);
+    engine.setSource (in.channel, in.stereo);
     engine.setArmed (in.armed);
     engine.setRecordWithFx (in.recordWithFx);
     engine.getFx().setSettings (in.fx);
+    activeInputs = (int) liveSet.inputs.size();
 
-    auto& strip = inputsView.inputStrips[(size_t) i]->strip;
+    updateSourceStrips();   // makes the strip if the input is new
+    auto& strip = inputsView.inputStrips[i]->strip;
     strip.fader.setValue (in.faderDb, juce::dontSendNotification);
     strip.muteButton.setToggleState (in.muted, juce::dontSendNotification);
+}
+
+void MainComponent::addInput()
+{
+    if ((int) liveSet.inputs.size() >= LiveSet::maxInputs)
+        return;
+
+    // It takes the first interface input no other strip uses - or, with all of them taken
+    // (a two-input interface), input 1 again: the same mic through different effects.
+    int available = LiveSet::maxDeviceInputs;
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+        available = juce::jlimit (1, LiveSet::maxDeviceInputs, device->getInputChannelNames().size());
+
+    juce::Array<int> used;
+    for (const auto& in : liveSet.inputs)
+    {
+        used.add (in.channel);
+        if (in.stereo)
+            used.add (in.channel + 1);
+    }
+    int channel = 0;
+    while (used.contains (channel))
+        ++channel;
+
+    LiveSet::Input in;
+    in.channel = channel < available ? channel : 0;
+    in.name = "Input " + juce::String ((int) liveSet.inputs.size() + 1);
+    liveSet.inputs.push_back (in);
+
+    const int i = (int) liveSet.inputs.size() - 1;
+    inputPluginWindows[(size_t) i].reset();
+    inputEngines[(size_t) i]->setInsert (nullptr);
+    applyInput (i);
+    saveSession();
+
+    infoMessage = in.name + " added on interface input " + juce::String (in.channel + 1) + " - click its name to pick another";
+    repaint();
+}
+
+void MainComponent::removeInput (int i)
+{
+    const int count = (int) liveSet.inputs.size();
+    if (i >= count || count <= 1)
+        return;
+
+    if (liveSet.inputs[(size_t) i].armed)
+        setArmed (i, false);
+
+    ++inputGeneration;          // indices are about to shift
+    activeInputs = count - 1;   // the audio thread lets go of the last engine first
+
+    for (int j = i; j < count; ++j)
+        inputPluginWindows[(size_t) j].reset();
+
+    // Slide the later inputs down one place, plug-ins and all.
+    inputEngines[(size_t) i]->setInsert (nullptr);
+    for (int j = i + 1; j < count; ++j)
+        inputEngines[(size_t) (j - 1)]->setInsert (inputEngines[(size_t) j]->setInsert (nullptr));
+
+    // Their MIDI moves down with them.
+    for (const juce::String prefix : { "inputFader.", "inputMute.", "arm." })
+    {
+        midiMap.clear (prefix + juce::String (i));
+        for (int j = i + 1; j < count; ++j)
+            if (const auto binding = midiMap.get (prefix + juce::String (j)); binding.isValid())
+            {
+                midiMap.clear (prefix + juce::String (j));
+                midiMap.bind (prefix + juce::String (j - 1), binding);
+            }
+    }
+    saveMidiMap();
+
+    liveSet.inputs.erase (liveSet.inputs.begin() + i);
+    for (int j = i; j < (int) liveSet.inputs.size(); ++j)
+        applyInput (j);
     updateSourceStrips();
+    updateMidiLeds();
+    saveSession();
 }
 
 void MainComponent::showInputMenu (int i)
 {
     const auto& in = liveSet.inputs[(size_t) i];
-    const char* const sources[] = { "Interface input 1", "Interface input 2", "Inputs 1 + 2 (stereo)" };
+
+    // The interface's inputs, by name where the driver gives one: singly, or in stereo pairs.
+    juce::StringArray names;
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+        names = device->getInputChannelNames();
+    names.removeRange (LiveSet::maxDeviceInputs, names.size());
+    // An input the set was saved with on a bigger interface stays listed, so it can be seen and changed.
+    const int available = juce::jmax (2, names.size(), in.channel + (in.stereo ? 2 : 1));
+
+    juce::PopupMenu mono, pairs;
+    for (int c = 0; c < available; ++c)
+    {
+        const auto driverName = c < names.size() ? names[c] : juce::String ("not on this interface");
+        const auto label = "Input " + juce::String (c + 1);
+        mono.addItem (100 + c, driverName.isNotEmpty() && driverName != label ? label + "  (" + driverName + ")" : label,
+                      true, ! in.stereo && in.channel == c);
+    }
+    for (int c = 0; c + 1 < available; c += 2)
+        pairs.addItem (200 + c, "Inputs " + juce::String (c + 1) + " + " + juce::String (c + 2), true, in.stereo && in.channel == c);
 
     juce::PopupMenu m;
     m.addSectionHeader (in.name);
     m.addItem (1, "Rename...");
     m.addSeparator();
-    for (int s = 0; s < 3; ++s)
-        m.addItem (10 + s, sources[s], true, in.source == s);
+    m.addSubMenu ("Mono input" + (in.stereo ? juce::String() : ":  " + juce::String (in.channel + 1)), mono);
+    m.addSubMenu ("Stereo pair" + (in.stereo ? ":  " + juce::String (in.channel + 1) + " + " + juce::String (in.channel + 2) : juce::String()), pairs);
     m.addSeparator();
 
     // An effect plug-in that runs first: pitch correction, vocoder, anything.
@@ -1754,8 +1911,10 @@ void MainComponent::showInputMenu (int i)
 
     m.addItem (20, "Record loops with effects", true, in.recordWithFx);
     m.addItem (21, "Record loops dry (change effects later)", true, ! in.recordWithFx);
+    m.addSeparator();
+    m.addItem (40, "Remove input", liveSet.inputs.size() > 1);
 
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (inputsView.inputStrips[(size_t) i].get()), [this, i, effects] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (inputsView.inputStrips[i]), [this, i, effects] (int r)
     {
         if (r == 0)
             return;
@@ -1778,12 +1937,16 @@ void MainComponent::showInputMenu (int i)
                 saveSession();
             });
 
-        if (r >= 10 && r < 13)
+        if (r >= 100 && r < 300)
         {
-            liveSet.inputs[(size_t) i].source = r - 10;
+            liveSet.inputs[(size_t) i].channel = r % 100;
+            liveSet.inputs[(size_t) i].stereo = r >= 200;
             applyInput (i);
             saveSession();
         }
+
+        if (r == 40)
+            removeInput (i);
 
         if (r == 20 || r == 21)
         {
@@ -2192,7 +2355,7 @@ void MainComponent::captureInstrumentStates()
         }
     }
 
-    for (int i = 0; i < LiveSet::numInputs; ++i)
+    for (int i = 0; i < (int) liveSet.inputs.size(); ++i)
     {
         if (auto* plugin = inputEngines[(size_t) i]->getInsert())
         {
@@ -2276,6 +2439,14 @@ void MainComponent::recPressed()
     if (state == Looper::State::finishing)
         return;   // already rounding off the last bar
 
+    if (state == Looper::State::waiting)
+    {
+        looper.cancelStart();
+        infoMessage = "Count-in called off";
+        repaint();
+        return;
+    }
+
     if (state == Looper::State::overdubbing)
         stopOverdubbing();
 
@@ -2286,7 +2457,10 @@ void MainComponent::recPressed()
         return;
     }
 
-    if (! looper.startRecording())
+    // On the bar: the take starts a round trip after the bar line, when the note the
+    // performer plays on "1" (in time with what they hear) reaches the looper.
+    const auto barLine = nextRecordStart();
+    if (! looper.startRecording (barLine < 0 ? -1 : barLine + roundTripLatency))
         errorMessage = "Still saving the last loop - press REC again";
 
     repaint();
@@ -2377,16 +2551,33 @@ void MainComponent::collectFinishedTake()
     if (firstLoopLength == 0)
         firstLoopLength = clip->data.getNumSamples();
 
+    // The first loop of free length, with nothing else playing, sets the tempo: the BPM
+    // becomes the one (of those a whole number of bars fits) nearest the current one.
+    juce::String tempoNote;
+    const bool firstLoop = ! anyLoopPlaying();
+    if (firstLoop && liveSet.loopLength == LiveSet::LoopLength::free)
+    {
+        const auto fit = TempoGuess::nearest (clip->data.getNumSamples() / sr, liveSet.bpm);
+        if (fit.bars > 0 && std::abs (fit.bpm - liveSet.bpm) >= 0.01)
+        {
+            setBpm (std::round (fit.bpm * 100.0) / 100.0);
+            tempoNote = " - BPM " + juce::String (liveSet.bpm, 2) + " to match its " + juce::String (fit.bars)
+                      + (fit.bars == 1 ? " bar" : " bars");
+        }
+    }
+
     // Carry straight on: phase-lock playback to when the performer actually played
     // the first sample (the input arrived a round trip later).
     slot.anchor = takeStart - roundTripLatency;
+    if (firstLoop)
+        beatAnchor = slot.anchor;   // the beat grid starts with the first loop
     if (engineFor (row).startLoop (slot.id, clip, 0.01, dbToGain (slot.volumeDb), slot.anchor))
         slot.playing = true;
 
     dubTargetId = slot.id;
     persistLiveClip (slot);
     addToPool ({ slot.file });
-    infoMessage = slot.label + " recorded (" + formatTime (clip->data.getNumSamples() / sr) + ") - DUB to layer on top";
+    infoMessage = slot.label + " recorded (" + formatTime (clip->data.getNumSamples() / sr) + ")" + tempoNote + " - DUB to layer on top";
     updateRowViews();
 }
 
@@ -2574,7 +2765,14 @@ void MainComponent::updateLooperStatus()
     const double beats = currentBeatPosition (recording);
     const auto barBeat = "bar " + juce::String ((int) (beats / 4.0) + 1) + "  -  beat " + juce::String ((int) beats % 4 + 1);
 
-    if (state == Looper::State::recording)
+    if (state == Looper::State::waiting)
+    {
+        const double samplesPerBeat = 60.0 / liveSet.bpm * currentSampleRate;
+        const auto barLine = looper.getStartTime() - roundTripLatency;
+        const int beatsLeft = (int) std::ceil ((double) (barLine - LoopPlayer::blockClock.load()) / samplesPerBeat);
+        status = "COUNT-IN  " + juce::String (juce::jmax (1, beatsLeft)) + "   - play on the next 1\nREC again to call it off";
+    }
+    else if (state == Looper::State::recording)
         status = "RECORDING  " + formatTime (looper.getRecordedSeconds()) + "   " + barBeat + "\nfrom " + armed.joinIntoString (", ");
     else if (state == Looper::State::finishing)
         status = "Finishing the bar...   " + barBeat;
@@ -2590,7 +2788,8 @@ void MainComponent::updateLooperStatus()
             status << "\nDUB target: " << slot->label;
     }
 
-    looperBar.setLooperStatus (status, state == Looper::State::recording || state == Looper::State::finishing,
+    looperBar.setLooperStatus (status, state == Looper::State::recording || state == Looper::State::finishing
+                                           || state == Looper::State::waiting,
                                 state == Looper::State::overdubbing);
 }
 
@@ -2612,14 +2811,14 @@ void MainComponent::loadInputPlugin (int i, const juce::PluginDescription& descr
     updateSourceStrips();
 
     juce::Component::SafePointer<MainComponent> safe (this);
-    const int generation = instrumentGeneration;
+    const int generation = inputGeneration;
 
     pluginFormats.createPluginInstanceAsync (description, currentSampleRate, currentBlockSize,
         [safe, i, state, generation, name = description.name] (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
         {
             auto* self = safe.getComponent();
-            if (self == nullptr || generation != self->instrumentGeneration)
-                return;   // the set changed while this was loading
+            if (self == nullptr || generation != self->inputGeneration || i >= (int) self->liveSet.inputs.size())
+                return;   // the set or its inputs changed while this was loading
 
             if (instance == nullptr)
             {
@@ -2767,15 +2966,17 @@ void MainComponent::startLoop (int row, int slot, bool fadeOutOthers)
 
         if (clip != nullptr)
         {
+            const auto startAt = nextLoopStart();
+
             // The other loops fade out over the same time this one fades in.
             if (fadeOutOthers)
                 for (auto& other : r->slots)
                     if (other.id != id)
-                        stopSlot (*r, other);
+                        stopSlot (*r, other, startAt);
 
-            // Anchor to now, so an overdub later lines up with this playback.
-            sl->anchor = LoopPlayer::blockClock.load();
-            if (engineFor (*r).startLoop (id, clip, fadeTimeSlider.getValue(), dbToGain (sl->volumeDb), sl->anchor))
+            // Anchor to the start, so an overdub later lines up with this playback.
+            sl->anchor = startAt;
+            if (engineFor (*r).startLoop (id, clip, fadeTimeSlider.getValue(), dbToGain (sl->volumeDb), sl->anchor, startAt))
                 sl->playing = true;
             else
                 errorMessage = "Too many loops at once in " + r->name;
@@ -2786,13 +2987,58 @@ void MainComponent::startLoop (int row, int slot, bool fadeOutOthers)
     });
 }
 
-void MainComponent::stopSlot (Row& row, Slot& slot)
+juce::int64 MainComponent::nextLoopStart()
+{
+    const auto now = LoopPlayer::blockClock.load();
+    if (liveSet.loopStart == LiveSet::LoopStart::now)
+        return now;
+
+    // Nothing to keep time with: start now, and the grid follows this loop.
+    if (! anyLoopPlaying())
+    {
+        beatAnchor = now;
+        return now;
+    }
+
+    const double beat = 60.0 / liveSet.bpm * currentSampleRate;
+    const double unit = liveSet.loopStart == LiveSet::LoopStart::bar ? beat * 4.0 : beat;
+    return nextGridPoint (now, beatAnchor, unit, (juce::int64) (0.05 * currentSampleRate));
+}
+
+juce::int64 MainComponent::nextRecordStart()
+{
+    if (liveSet.loopStart == LiveSet::LoopStart::now)
+        return -1;
+
+    const auto now = LoopPlayer::blockClock.load();
+    const double beat = 60.0 / liveSet.bpm * currentSampleRate;
+
+    // Nothing playing: a bar's count-in from the press, and the grid starts with it.
+    if (! anyLoopPlaying())
+    {
+        beatAnchor = now;
+        return now + (juce::int64) std::llround (4.0 * beat);
+    }
+
+    return nextGridPoint (now + (juce::int64) beat, beatAnchor, 4.0 * beat, 0);
+}
+
+bool MainComponent::anyLoopPlaying() const
+{
+    for (auto& r : liveSet.rows)
+        for (auto& s : r.slots)
+            if (s.playing)
+                return true;
+    return false;
+}
+
+void MainComponent::stopSlot (Row& row, Slot& slot, juce::int64 startAt)
 {
     if (slot.id == overdubSlotId)
         stopOverdubbing();
 
     if (slot.playing)
-        engineFor (row).stopLoop (slot.id, fadeTimeSlider.getValue());
+        engineFor (row).stopLoop (slot.id, fadeTimeSlider.getValue(), startAt);
 
     slot.playing = false;
     slot.loading = false;
@@ -3375,8 +3621,8 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
 
         if (target.startsWith ("inputFader."))
         {
-            if (const int i = target.getTrailingIntValue(); m.isController() && i < LiveSet::numInputs)
-                applyFaderMidi (target, inputsView.inputStrips[(size_t) i]->strip, (float) m.getControllerValue() / 127.0f);
+            if (const int i = target.getTrailingIntValue(); m.isController() && i < inputsView.inputStrips.size())
+                applyFaderMidi (target, inputsView.inputStrips[i]->strip, (float) m.getControllerValue() / 127.0f);
             continue;
         }
 
@@ -3400,7 +3646,7 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
 
         if (target.startsWith ("inputMute."))
         {
-            if (const int i = target.getTrailingIntValue(); pressed && i < LiveSet::numInputs)
+            if (const int i = target.getTrailingIntValue(); pressed && i < (int) liveSet.inputs.size())
             {
                 liveSet.inputs[(size_t) i].muted = ! liveSet.inputs[(size_t) i].muted;
                 applyInput (i);
@@ -3429,12 +3675,13 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
         else if (target == "tap")   tapTempo();
         else if (target == "rec")   recPressed();
         else if (target == "freeze") toggleFreeze();
+        else if (target == "sync")  syncLoops (false);
         else if (target == "recSet") toggleSetRecording();
         else if (target == "dub")   dubPressed();
         else if (target == "undo")  undoPressed();
         else if (target.startsWith ("arm."))
         {
-            if (const int i = target.getTrailingIntValue(); i < LiveSet::numInputs)
+            if (const int i = target.getTrailingIntValue(); i < (int) liveSet.inputs.size())
                 setArmed (i, ! liveSet.inputs[(size_t) i].armed);
         }
     }
@@ -3527,7 +3774,7 @@ void MainComponent::updateMidiLeds (bool allOff)
         for (const auto& slot : row.slots)
             want ("ch." + slot.uid + ".play", slot.playing);
     }
-    for (int i = 0; i < LiveSet::numInputs; ++i)
+    for (int i = 0; i < (int) liveSet.inputs.size(); ++i)
         want ("arm." + juce::String (i), liveSet.inputs[(size_t) i].armed);
 
     if (allOff)
@@ -3577,6 +3824,57 @@ void MainComponent::saveMidiMap()
     settings.getUserSettings()->setValue ("midiMap", midiMap.toXml ([] (const juce::String& t) { return ! MidiMap::isSetTarget (t); }).get());
     liveSet.midi = std::shared_ptr<juce::XmlElement> (midiMap.toXml ([] (const juce::String& t) { return MidiMap::isSetTarget (t); }).release());
     saveSession();
+}
+
+void MainComponent::syncLoops (bool restart)
+{
+    struct Playing { LiveSet::Row* row; LiveSet::Slot* slot; };
+    std::vector<Playing> playing;
+    LiveSet::Slot* reference = nullptr;
+
+    for (auto& r : liveSet.rows)
+        for (auto& s : r.slots)
+            if (s.playing && ! s.loading && s.anchor >= 0)
+            {
+                playing.push_back ({ &r, &s });
+                if (reference == nullptr || s.anchor < reference->anchor)
+                    reference = &s;
+            }
+
+    if (playing.empty())
+    {
+        infoMessage = "No loops playing to sync";
+        repaint();
+        return;
+    }
+
+    // An overdub records against its loop's timing, so that loop stays put.
+    if (auto [row, dubbed] = liveSet.findSlot (overdubSlotId); dubbed != nullptr && dubbed->playing)
+        reference = dubbed;
+
+    const bool keepReference = ! restart || overdubSlotId >= 0;
+    const auto anchor = keepReference ? reference->anchor : LoopPlayer::blockClock.load();
+    int moved = 0;
+
+    for (auto& p : playing)
+    {
+        if (p.slot->anchor == anchor)
+            continue;
+
+        p.slot->anchor = anchor;
+        engineFor (*p.row).realignLoop (p.slot->id, anchor);
+        ++moved;
+    }
+
+    beatAnchor = anchor;   // the beat lights count from the loops' shared start
+
+    if (keepReference)
+        infoMessage = moved == 0 ? "Loops already in sync"
+                                 : "Synced " + juce::String (moved) + (moved == 1 ? " loop" : " loops") + " to " + (reference->label.isNotEmpty() ? reference->label : reference->file.getFileNameWithoutExtension());
+    else
+        infoMessage = "Restarted " + juce::String (moved) + (moved == 1 ? " loop" : " loops") + " together";
+
+    repaint();
 }
 
 void MainComponent::toggleFreeze()
@@ -3637,14 +3935,25 @@ void MainComponent::updateFireButtons (bool allOff)
         return;
 
     // The Fire lights its buttons from a CC with the button's number. For REC:
-    // 0 off, 1 dim red, 3 bright red, 4 bright amber.
+    // 0 off, 1 dim red, 3 bright red, 4 bright amber. For PLAY: 0 off, 3 bright yellow, 4 bright green.
+    bool counting = false;
+    const double beats = currentBeatPosition (counting);
+    const bool onBeat = beats - std::floor (beats) < 0.25;   // the first quarter of each beat
+    const auto state = looper.getState();
+
     std::map<int, int> wanted;
     const auto rec = midiMap.get ("rec");
     if (rec.isValid() && rec.isNote && rec.device.containsIgnoreCase (MidiMap::fireName))
     {
-        const auto state = looper.getState();
-        wanted[rec.number] = state == Looper::State::overdubbing ? 4 : state != Looper::State::idle ? 3 : 1;
+        if (state == Looper::State::waiting)
+            wanted[rec.number] = onBeat ? 3 : 1;   // blinks through the count-in
+        else
+            wanted[rec.number] = state == Looper::State::overdubbing ? 4 : state != Looper::State::idle ? 3 : 1;
     }
+
+    // PLAY is a beat light: green on 1, yellow on the other beats, while anything's in time.
+    if (anyLoopPlaying() || state != Looper::State::idle)
+        wanted[MidiMap::firePlayNote] = onBeat ? ((int) std::floor (beats) % 4 == 0 ? 4 : 3) : 0;
 
     // Buttons that no longer have a job go dark.
     for (auto& [number, value] : fireButtonState)
@@ -3763,9 +4072,9 @@ void MainComponent::timerCallback()
         saveSession();
     }
 
-    for (size_t i = 0; i < inputEngines.size(); ++i)
+    for (int i = 0; i < inputsView.inputStrips.size(); ++i)
     {
-        const auto [l, r] = inputEngines[i]->takePeaks();
+        const auto [l, r] = inputEngines[(size_t) i]->takePeaks();
         inputsView.inputStrips[i]->strip.meter.pushPeak (0, l);
         inputsView.inputStrips[i]->strip.meter.pushPeak (1, r);
     }
@@ -3899,25 +4208,37 @@ void MainComponent::resized()
 
     // Bottom bar: stop all, the looper, fade time, then tempo on the right.
     auto bottom = area.removeFromBottom (60);
-    stopAllButton.setBounds (bottom.removeFromLeft (150));
+
+    // In a narrow window (a laptop, or not maximised) everything tightens up and the
+    // "BPM" label goes, so the looper keeps room for its length box.
+    const bool narrow = bottom.getWidth() < 1720;
+    const int gap = narrow ? 12 : 20;
+
+    stopAllButton.setBounds (bottom.removeFromLeft (narrow ? 110 : 150));
     bottom.removeFromLeft (10);
-    freezeButton.setBounds (bottom.removeFromLeft (110).withSizeKeepingCentre (110, 40));
-    bottom.removeFromLeft (20);
+    freezeButton.setBounds (bottom.removeFromLeft (narrow ? 90 : 110).withSizeKeepingCentre (narrow ? 90 : 110, 40));
+    bottom.removeFromLeft (gap);
     auto controls = bottom.withSizeKeepingCentre (bottom.getWidth(), 40);
 
-    auto tempo = controls.removeFromRight (340);
-    tapButton.setBounds (tempo.removeFromRight (64));
-    tempo.removeFromRight (8);
-    bpmSlider.setBounds (tempo.removeFromRight (110));
-    tempo.removeFromRight (12);
-    beatIndicator.setBounds (tempo.removeFromRight (106).reduced (0, 8));
+    auto tempo = controls.removeFromRight (narrow ? 420 : 532);
+    const int tempoGap = narrow ? 6 : 8;
+    tapButton.setBounds (tempo.removeFromRight (narrow ? 56 : 64));
+    tempo.removeFromRight (tempoGap);
+    syncButton.setBounds (tempo.removeFromRight (narrow ? 58 : 64));
+    tempo.removeFromRight (tempoGap);
+    loopStartBox.setBounds (tempo.removeFromRight (narrow ? 104 : 112).reduced (0, 4));
+    tempo.removeFromRight (tempoGap);
+    bpmSlider.setBounds (tempo.removeFromRight (narrow ? 88 : 110));
+    tempo.removeFromRight (narrow ? 8 : 12);
+    beatIndicator.setBounds (tempo.removeFromRight (narrow ? 90 : 106).reduced (0, 8));
+    bpmLabel.setVisible (! narrow);
     bpmLabel.setBounds (tempo);
-    controls.removeFromRight (24);
+    controls.removeFromRight (narrow ? 12 : 24);
 
-    auto fade = controls.removeFromRight (280);
-    fadeTimeLabel.setBounds (fade.removeFromLeft (76));
+    auto fade = controls.removeFromRight (narrow ? 200 : 280);
+    fadeTimeLabel.setBounds (fade.removeFromLeft (narrow ? 64 : 76));
     fadeTimeSlider.setBounds (fade);
-    controls.removeFromRight (20);
+    controls.removeFromRight (gap);
 
     // The looper's buttons sit centred between FREEZE and the fade time, with its
     // status text trailing to the right (moved left if that text would be squeezed).

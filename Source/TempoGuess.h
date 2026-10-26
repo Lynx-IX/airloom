@@ -60,4 +60,19 @@ namespace TempoGuess
 
         return options;
     }
+
+    // Of the tempos a loop of this length fits, the one nearest 'currentBpm' (by ratio,
+    // so 72 is as near 144 as it is 36). An empty option (0 bars) if none fits.
+    inline Option nearest (double seconds, double currentBpm)
+    {
+        Option best { 0, 0.0 };
+        double bestDistance = 1.0e9;
+        for (const auto& o : fromLength (seconds))
+            if (const double d = std::abs (std::log (o.bpm / currentBpm)); d < bestDistance)
+            {
+                bestDistance = d;
+                best = o;
+            }
+        return best;
+    }
 }

@@ -75,10 +75,9 @@ void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
 {
     numSamples = juce::jmin (numSamples, scratch.getNumSamples(), in.getNumSamples());
 
-    // Mono sources feed both sides; the stereo source takes inputs 1 and 2.
-    const int src = source;
-    const int leftIn = src == input2 ? 1 : 0;
-    const int rightIn = src == stereo12 ? 1 : leftIn;
+    // A mono source feeds both sides; a stereo pair is its input and the next.
+    const int leftIn = firstChannel;
+    const int rightIn = stereoPair ? leftIn + 1 : leftIn;
 
     for (int ch = 0; ch < 2; ++ch)
     {

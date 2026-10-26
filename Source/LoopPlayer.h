@@ -23,6 +23,15 @@ LoopClipPtr makeSeamlessLoop (const LoopClipPtr& source, double crossfadeSeconds
 // A copy of the clip playing backwards.
 std::shared_ptr<LoopClip> makeReversed (const LoopClip& source);
 
+// The first point on a grid (every 'unit' samples from 'origin') at or after 'now'. A grid
+// point passed less than 'grace' samples ago counts, so a slightly late press isn't pushed
+// back a whole beat.
+inline juce::int64 nextGridPoint (juce::int64 now, juce::int64 origin, double unit, juce::int64 grace)
+{
+    const double steps = std::ceil ((double) (now - grace - origin) / unit);
+    return origin + (juce::int64) std::llround (steps * unit);
+}
+
 // Plays one clip as a gapless loop with an equal-power fade in/out.
 // The wrap from the last sample back to the first is interpolated, so a
 // properly cut loop plays with no click or gap. If the clip's sample rate
@@ -47,8 +56,14 @@ public:
     void setClip (LoopClipPtr newClip, juce::int64 anchor = -1);
     LoopClipPtr getClip() const;
 
-    // Ramps the fade level linearly to target (0..1) over the given time.
-    void fadeTo (float target, double seconds);
+    // Moves a playing loop to where it would be had it started at 'anchor', with a
+    // quick crossfade from the old position so the jump doesn't click.
+    void realign (juce::int64 anchor);
+    static constexpr double realignSeconds = 0.03;
+
+    // Ramps the fade level linearly to target (0..1) over the given time, starting
+    // straight away or, with 'at', once blockClock reaches that time.
+    void fadeTo (float target, double seconds, juce::int64 at = -1);
 
     // When false the clip plays once and then goes silent.
     void setLooping (bool shouldLoop)   { looping = shouldLoop; }
@@ -77,7 +92,9 @@ private:
 
     double deviceRate = 44100.0;
     double readPos = 0.0;            // audio thread only
-    std::atomic<bool> resetRequested { false };
+    std::atomic<bool> resetRequested { false }, realignRequested { false };
+    double jumpFromPos = 0.0;        // audio thread only: the old position while realigning
+    int jumpLeft = 0, jumpLength = 1;
     std::atomic<juce::int64> startAnchor { -1 };
     std::atomic<bool> looping { true };
     std::atomic<float> voiceGain { 1.0f };
@@ -88,6 +105,7 @@ private:
     // Fade commands from the message thread, picked up by the audio thread.
     std::atomic<float> fadeTarget { 0.0f };
     std::atomic<double> fadeSeconds { 0.0 };
+    std::atomic<juce::int64> fadeStartAt { -1 };
     std::atomic<int> fadeCommand { 0 };
 
     int fadeCommandSeen = 0;         // audio thread only

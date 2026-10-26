@@ -4,7 +4,8 @@
 
 // Records new loops from the armed inputs and overdubs onto playing ones.
 //
-// Recording: startRecording() begins capturing at the next block;
+// Recording: startRecording() begins capturing at the next block, or at a given
+// clock time (waiting until then - the count-in);
 // stopRecording() ends it, optionally rounding the length to a unit (a bar,
 // or the first loop's length) - if that means going longer, it keeps
 // recording until the unit is complete. The finished take is then collected
@@ -19,11 +20,15 @@
 class Looper
 {
 public:
-    enum class State { idle, recording, finishing, finished, overdubbing };
+    enum class State { idle, waiting, recording, finishing, finished, overdubbing };
 
     void prepare (double sampleRate, double maxSeconds = 300.0);
 
-    bool startRecording();   // false if the last take hasn't been collected yet
+    // Starts at clock time 'at' (to the sample), or with -1 at the next block.
+    // False if the last take hasn't been collected yet.
+    bool startRecording (juce::int64 at = -1);
+    void cancelStart();                          // calls off a recording that's still waiting
+    juce::int64 getStartTime() const    { return startAt; }
     void stopRecording (juce::int64 unitSamples);
     void startOverdub (std::shared_ptr<LoopClip> clip, juce::int64 anchor);
     void stopOverdub();
@@ -49,7 +54,8 @@ private:
     std::atomic<int> state { (int) State::idle };
     std::atomic<int> length { 0 }, loopLength { 0 };
     std::atomic<juce::int64> takeStart { 0 }, stopUnit { 0 };
-    std::atomic<bool> startRequested { false }, stopRequested { false };
+    std::atomic<bool> startRequested { false }, stopRequested { false }, cancelRequested { false };
+    std::atomic<juce::int64> startAt { -1 };
     int targetLength = 0;                          // audio thread only
 
     std::shared_ptr<LoopClip> dubClip;             // keeps the overdub target alive (message thread)

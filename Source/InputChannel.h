@@ -12,8 +12,6 @@
 class InputChannel
 {
 public:
-    enum Source { input1, input2, stereo12 };
-
     InputChannel() = default;
 
     void prepare (double sampleRate, int maxBlockSize);
@@ -28,7 +26,7 @@ public:
     void setGain (float linearGain)   { targetGain = linearGain; }
     void setMuted (bool shouldMute)   { muted = shouldMute; }
     void setMonitor (bool shouldHear) { monitor = shouldHear; }
-    void setSource (int newSource)    { source = newSource; }
+    void setSource (int channel, bool stereo)   { firstChannel = channel; stereoPair = stereo; }
     void setArmed (bool shouldArm)    { armed = shouldArm; }
     void setRecordWithFx (bool wet)   { recordWithFx = wet; }
 
@@ -57,7 +55,8 @@ private:
     juce::SmoothedValue<float> gain;
     std::atomic<float> targetGain { 1.0f };
     std::atomic<bool> muted { false }, monitor { false }, armed { false }, recordWithFx { true };
-    std::atomic<int> source { input1 };
+    std::atomic<int> firstChannel { 0 };
+    std::atomic<bool> stereoPair { false };
     std::atomic<float> peakL { 0.0f }, peakR { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InputChannel)

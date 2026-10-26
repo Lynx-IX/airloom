@@ -108,7 +108,7 @@ void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int n
     peakR = juce::jmax (peakR.load(), pr);
 }
 
-bool LoopChannel::startLoop (int owner, LoopClipPtr clip, double seconds, float voiceGain, juce::int64 anchor)
+bool LoopChannel::startLoop (int owner, LoopClipPtr clip, double seconds, float voiceGain, juce::int64 anchor, juce::int64 startAt)
 {
     // Use a voice nobody can hear: replacing an audible clip would click.
     for (size_t i = 0; i < loops.size(); ++i)
@@ -121,19 +121,27 @@ bool LoopChannel::startLoop (int owner, LoopClipPtr clip, double seconds, float 
         p.setLooping (true);
         p.setVoiceGain (voiceGain, true);
         p.setClip (std::move (clip), anchor);
-        p.fadeTo (1.0f, seconds);
+        p.fadeTo (1.0f, seconds, startAt);
         return true;
     }
 
     return false;
 }
 
-void LoopChannel::stopLoop (int owner, double seconds)
+void LoopChannel::stopLoop (int owner, double seconds, juce::int64 startAt)
 {
     // The voice keeps its owner while it fades, so it stays in that channel's effects.
     for (size_t i = 0; i < loops.size(); ++i)
         if (loopOwners[i] == owner && loops[i].isAudible() && loops[i].getFadeTarget() > 0.0f)
-            loops[i].fadeTo (0.0f, seconds);
+            loops[i].fadeTo (0.0f, seconds, startAt);
+}
+
+void LoopChannel::realignLoop (int owner, juce::int64 anchor)
+{
+    // Only the voice that's playing: one fading out after a stop is left to finish.
+    for (size_t i = 0; i < loops.size(); ++i)
+        if (loopOwners[i] == owner && loops[i].getFadeTarget() > 0.0f)
+            loops[i].realign (anchor);
 }
 
 bool LoopChannel::isFadingIn (int owner) const

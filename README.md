@@ -188,6 +188,49 @@ to a WAV file, until pressed again. The button shows how long it has been record
 `Recordings/Sets/Set <date> <time>.wav` (right-click REC SET > **Show set recordings**). They're 24-bit stereo,
 about 1 GB an hour at 48 kHz.
 
+## Starting loops in time
+
+**Start: now / beat / bar** (next to SYNC) sets when a loop you press comes in. On *beat* or *bar* it waits for the
+next beat or bar at the BPM, counted from the loops already playing, so it lands in time with them - and in a
+crossfade the old loop starts fading at that same moment. A press just after the beat (within 50 ms) still counts as
+on it. With nothing playing, a loop starts straight away and the beat grid starts with it. TAP and SYNC also reset
+where the grid's beats fall. The setting is saved with the set. It only changes when loops start - instruments still
+play the moment you play them.
+
+## Inputs
+
+The INPUTS group starts with two (Mic on interface input 1, Instrument on input 2). **+ INPUT** adds another, up to
+eight - it takes the first interface input no other strip uses, or input 1 again when they're all taken (the same
+mic through a second set of effects). Click an input's name to pick its source: any single
+interface input (**Mono input**), or two side by side as a **Stereo pair** (e.g. a synth or a stereo mic on 3+4).
+**Remove input** is in the same menu; MIDI assigned to later inputs moves down with them. Airloom opens every input
+on the interface (up to 16), so there's nothing to switch on in Audio Settings. Through Windows Audio, an interface
+like the MOTU M Series or a Scarlett 2i2 shows Airloom just its first two inputs.
+
+## Recording in time
+
+With **Start** on *beat* or *bar*, REC doesn't start straight away: it counts you in to the next bar line at least a
+beat away (with nothing playing, one whole bar from the press). The beat lights go red and count the bar, the looper
+says how many beats are left, and the Fire's REC button blinks - start playing on the next 1. Press REC again during
+the count-in to call it off. Recordings then start exactly on the bar, allowing for the interface's delay, so they
+sit on the same grid as the loops already playing. With **Start: now**, REC starts the moment you press it, as before.
+
+The **first loop** you record in *Free length* with nothing else playing sets the tempo: the BPM becomes the one that
+fits a whole number of bars into it (the nearest to the BPM you had), and the beat grid starts with it. Everything
+after - Start on the bar, Snap to bars, synced delays, SYNC - then follows what you actually played.
+
+The Fire's **PLAY** button is a beat light while loops are playing or you're recording: green on beat 1, yellow on
+the others.
+
+## Sync
+
+Loops start the moment you press them, so after a while they can sit off each other's beat. **SYNC** (next to TAP)
+lines every playing loop back up with the one that's been playing longest - that one carries on untouched, the rest
+slide into step with a 30 ms crossfade, and the beat lights follow. While overdubbing, the loop being overdubbed is the
+one the others line up with. Right-click SYNC to **restart all loops together from the top** instead, or to assign a
+MIDI button. Loops whose lengths fit together (whole bars at one tempo) stay together; loops of unrelated lengths drift
+apart again over time, so press SYNC whenever they need it.
+
 ## Freeze
 
 **FREEZE** (bottom bar, next to STOP ALL) holds what you just played - the live inputs and instruments, with their
@@ -218,7 +261,7 @@ press the hardware control. Learnable controls:
 
 - each channel's **PLAY/STOP**, **XF** and **volume** (a MIDI tag appears on the channel once it has any)
 - each group's **fader** and **mute**
-- master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, TAP, FREEZE, REC SET
+- master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, TAP, SYNC, FREEZE, REC SET
 
 Channel and group assignments are **saved with the set** (and travel in an exported pack), and follow the channel or
 group wherever it's moved. The rest belong to the computer. Out of the box only the MidiMix **master fader**, its

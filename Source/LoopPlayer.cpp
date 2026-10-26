@@ -91,22 +91,31 @@ void LoopPlayer::setClip (LoopClipPtr newClip, juce::int64 anchor)
     resetRequested = true;
 }   // the old clip is freed here, off the audio thread
 
+void LoopPlayer::realign (juce::int64 anchor)
+{
+    startAnchor = anchor;
+    realignRequested = true;
+}
+
 LoopClipPtr LoopPlayer::getClip() const
 {
     const juce::SpinLock::ScopedLockType sl (clipLock);
     return clip;
 }
 
-void LoopPlayer::fadeTo (float target, double seconds)
+void LoopPlayer::fadeTo (float target, double seconds, juce::int64 at)
 {
     fadeTarget = target;
     fadeSeconds = seconds;
+    fadeStartAt = at;
     ++fadeCommand;
 }
 
 bool LoopPlayer::process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
 {
-    if (const int command = fadeCommand; command != fadeCommandSeen)
+    // A fade scheduled for later waits for its block. A loop waiting to start stays
+    // silent until then, and only works out its position when it does start.
+    if (const int command = fadeCommand; command != fadeCommandSeen && fadeStartAt.load() <= blockClock.load())
     {
         fadeCommandSeen = command;
         fadeGoal = fadeTarget;
@@ -141,7 +150,27 @@ bool LoopPlayer::process (juce::AudioBuffer<float>& buffer, int startSample, int
         // Anchored: pick up where the loop would be had it started at the anchor.
         if (const auto anchor = startAnchor.load(); anchor >= 0)
             readPos = std::fmod ((double) juce::jmax ((juce::int64) 0, blockClock.load() - anchor) * step, (double) length);
+
+        realignRequested = false;   // a fresh start is already where it should be
+        jumpLeft = 0;
     }
+    else if (realignRequested.exchange (false))
+    {
+        if (const auto anchor = startAnchor.load(); anchor >= 0)
+        {
+            jumpFromPos = readPos;
+            readPos = std::fmod ((double) juce::jmax ((juce::int64) 0, blockClock.load() - anchor) * step, (double) length);
+            jumpLength = jumpLeft = juce::jmax (1, (int) (realignSeconds * deviceRate));
+        }
+    }
+
+    // The clip at a position, interpolated; the wrap from the last sample back to the first is seamless.
+    auto read = [length] (const float* src, double pos)
+    {
+        const int i0 = (int) pos;
+        const int i1 = (i0 + 1 == length) ? 0 : i0 + 1;
+        return src[i0] + (float) (pos - i0) * (src[i1] - src[i0]);
+    };
     const bool loop = looping;
     float blockPeak = 0.0f;
 
@@ -170,14 +199,17 @@ bool LoopPlayer::process (juce::AudioBuffer<float>& buffer, int startSample, int
         // sin() curve: two players crossfading this way keep constant power.
         const float g = std::sin (fade * juce::MathConstants<float>::halfPi) * voiceGainRamp.getNextValue();
 
-        const int i0 = (int) readPos;
-        const int i1 = (i0 + 1 == length) ? 0 : i0 + 1;   // wrap seamlessly across the loop point
-        const float frac = (float) (readPos - i0);
+        // Realigning: blend from the old position into the new one. Linear, since the two
+        // are often nearly the same audio and an equal-power blend would bump the level.
+        const float blend = jumpLeft > 0 ? 1.0f - (float) jumpLeft / (float) jumpLength : 1.0f;
 
         for (int ch = 0; ch < outChannels; ++ch)
         {
             const float* src = data.getReadPointer (ch % clipChannels);
-            const float s = (src[i0] + frac * (src[i1] - src[i0])) * g;
+            float s = read (src, readPos);
+            if (jumpLeft > 0)
+                s = s * blend + read (src, jumpFromPos) * (1.0f - blend);
+            s *= g;
             buffer.addSample (ch, startSample + i, s);
             blockPeak = juce::jmax (blockPeak, std::abs (s));
         }
@@ -185,6 +217,14 @@ bool LoopPlayer::process (juce::AudioBuffer<float>& buffer, int startSample, int
         readPos += step;
         if (readPos >= length)
             readPos -= length;
+
+        if (jumpLeft > 0)
+        {
+            --jumpLeft;
+            jumpFromPos += step;
+            if (jumpFromPos >= length)
+                jumpFromPos -= length;
+        }
     }
 
     fadeLevel = fade;

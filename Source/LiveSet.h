@@ -66,7 +66,8 @@ struct LiveSet
     struct Input
     {
         juce::String name;
-        int source = 0;                // InputChannel::Source: input 1, input 2, or 1+2 stereo
+        int channel = 0;               // the interface input it takes (0 = input 1)
+        bool stereo = false;           // true: that input and the next, as a stereo pair
         double faderDb = 0.0;
         bool muted = false;
         bool monitor = false;          // off until switched on, so a mic can't feed back by surprise
@@ -101,16 +102,19 @@ struct LiveSet
 
     static constexpr int maxInstruments = 4;
 
-    static constexpr int numInputs = 2;
-    static std::array<Input, numInputs> defaultInputs();
+    static constexpr int maxInputs = 8;          // input strips in a set
+    static constexpr int maxDeviceInputs = 16;   // interface inputs opened
+    static std::vector<Input> defaultInputs();
 
     std::vector<Row> rows;
-    std::array<Input, numInputs> inputs = defaultInputs();
+    std::vector<Input> inputs = defaultInputs();
     std::vector<Instrument> instruments;
     juce::Array<juce::File> pool;      // every sample loaded into the set, used or not
     juce::File file;                   // the .liverig file; empty until saved
     double masterDb = 0.0;
     double fadeSeconds = 8.0;
+    enum class LoopStart { now, beat, bar };
+    LoopStart loopStart = LoopStart::now;   // when a pressed loop comes in
     double bpm = 72.0;                 // for synced delays and snapping recorded loops to bars
     LoopLength loopLength = LoopLength::free;
     juce::Point<int> inputsPosition { -1, -1 };   // where the Inputs + Looper group was placed

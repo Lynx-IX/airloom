@@ -11,17 +11,17 @@ LiveSet::Row LiveSet::makeRow (const juce::String& name, bool oneShot, int numSl
     return r;
 }
 
-std::array<LiveSet::Input, LiveSet::numInputs> LiveSet::defaultInputs()
+std::vector<LiveSet::Input> LiveSet::defaultInputs()
 {
-    std::array<Input, numInputs> in;
+    std::vector<Input> in (2);
 
     in[0].name = "Mic";
-    in[0].source = 0;
+    in[0].channel = 0;
     in[0].fx.lowCutOn = true;     // clear rumble and handling noise
     in[0].fx.reverbOn = true;
 
     in[1].name = "Instrument";
-    in[1].source = 1;
+    in[1].channel = 1;
     return in;
 }
 
@@ -133,6 +133,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     xml->setAttribute ("version", 3);
     xml->setAttribute ("master", masterDb);
     xml->setAttribute ("fade", fadeSeconds);
+    xml->setAttribute ("loopStart", (int) loopStart);
     xml->setAttribute ("bpm", bpm);
     xml->setAttribute ("loopLength", (int) loopLength);
     xml->setAttribute ("inputsX", inputsPosition.x);
@@ -175,7 +176,8 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     {
         auto* ie = xml->createNewChildElement ("Input");
         ie->setAttribute ("name", in.name);
-        ie->setAttribute ("source", in.source);
+        ie->setAttribute ("channel", in.channel);
+        ie->setAttribute ("stereo", in.stereo);
         ie->setAttribute ("fader", in.faderDb);
         ie->setAttribute ("mute", in.muted);
         ie->setAttribute ("monitor", in.monitor);
@@ -222,6 +224,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     pool.clear();
     masterDb = xml.getDoubleAttribute ("master", 0.0);
     fadeSeconds = xml.getDoubleAttribute ("fade", 8.0);
+    loopStart = (LoopStart) juce::jlimit (0, 2, xml.getIntAttribute ("loopStart", 0));
     bpm = juce::jlimit (30.0, 240.0, xml.getDoubleAttribute ("bpm", 72.0));
     loopLength = (LoopLength) juce::jlimit (0, 2, xml.getIntAttribute ("loopLength", 0));
     inputsPosition = { xml.getIntAttribute ("inputsX", -1), xml.getIntAttribute ("inputsY", -1) };
@@ -266,16 +269,34 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     if (rows.empty())
         rows = makeDefault().rows;
 
+    // As many inputs as the set was saved with (the first two start from the defaults).
     inputs = defaultInputs();
+    int saved = 0;
+    for (auto* ie : xml.getChildWithTagNameIterator ("Input"))
+        saved += ie != nullptr ? 1 : 0;
+    if (saved > 0)
+        inputs.resize ((size_t) juce::jmin (saved, maxInputs));
+
     int i = 0;
     for (auto* ie : xml.getChildWithTagNameIterator ("Input"))
     {
-        if (i >= numInputs)
+        if (i >= maxInputs)
             break;
 
         auto& in = inputs[(size_t) i++];
         in.name = ie->getStringAttribute ("name", in.name);
-        in.source = juce::jlimit (0, 2, ie->getIntAttribute ("source", in.source));
+        if (ie->hasAttribute ("channel"))
+        {
+            in.channel = juce::jlimit (0, maxDeviceInputs - 1, ie->getIntAttribute ("channel"));
+            in.stereo = ie->getBoolAttribute ("stereo");
+        }
+        else
+        {
+            // Sets from before any input could be picked: 0 = input 1, 1 = input 2, 2 = inputs 1+2 stereo.
+            const int source = juce::jlimit (0, 2, ie->getIntAttribute ("source", in.channel));
+            in.channel = source == 1 ? 1 : 0;
+            in.stereo = source == 2;
+        }
         in.faderDb = ie->getDoubleAttribute ("fader", in.faderDb);
         in.muted = ie->getBoolAttribute ("mute", in.muted);
         in.monitor = ie->getBoolAttribute ("monitor", in.monitor);

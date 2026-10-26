@@ -26,10 +26,13 @@ public:
     void setGain (float linearGain)   { targetGain = linearGain; }
     void setMuted (bool shouldMute)   { muted = shouldMute; }
 
-    // Fades a loop in, phase-locked to 'anchor' on LoopPlayer::blockClock.
-    // Returns false if every voice is busy.
-    bool startLoop (int owner, LoopClipPtr clip, double seconds, float gain, juce::int64 anchor);
-    void stopLoop (int owner, double seconds);
+    // Fades a loop in, phase-locked to 'anchor' on LoopPlayer::blockClock, from that
+    // clock time 'startAt' (or straight away). Returns false if every voice is busy.
+    bool startLoop (int owner, LoopClipPtr clip, double seconds, float gain, juce::int64 anchor, juce::int64 startAt = -1);
+    void stopLoop (int owner, double seconds, juce::int64 startAt = -1);
+
+    // Moves the owner's playing loop into phase with 'anchor' (see LoopPlayer::realign).
+    void realignLoop (int owner, juce::int64 anchor);
     bool isFadingIn (int owner) const;
 
     void triggerShot (int owner, LoopClipPtr clip, float gain);

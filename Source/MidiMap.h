@@ -50,6 +50,7 @@ public:
     static constexpr const char* midiMixName = "MIDI Mix";
     static constexpr const char* fireName = "FIRE";
     static constexpr int fireRecNote = 53;   // the Akai Fire's REC button (its light is CC 53)
+    static constexpr int firePlayNote = 51;  // its PLAY button: Airloom's beat light (CC 51)
 
 private:
     std::map<juce::String, MidiBinding> bindings;

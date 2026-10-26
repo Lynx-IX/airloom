@@ -225,6 +225,36 @@ namespace FxSelfTest
         }
 
         {
+            // Count-in: a take due at a clock time part-way through a block waits, then starts on that very sample.
+            Looper looper;
+            looper.prepare (sr, 10.0);
+            const juce::int64 due = clock + 3 * lb + 123;
+            looper.startRecording (due);
+            feed (looper, 2);
+            const bool waited = looper.getState() == Looper::State::waiting;
+            feed (looper, 50);
+            looper.stopRecording (0);
+            for (int guard = 0; guard < 400 && looper.getState() != Looper::State::finished; ++guard)
+                feed (looper, 1);
+            juce::AudioBuffer<float> take;
+            juce::int64 start = 0;
+            looper.collectTake (take, start);
+            // Past the seam blend, the take is the ramp from 'due' on.
+            const float at2000 = take.getSample (0, 2000);
+            check (waited && start == due && std::abs (at2000 - (float) ((due + 2000) % 100000)) < 0.5f,
+                   "Count-in: recording waits, then starts on the exact sample (" + juce::String (start - due) + " off)");
+
+            // REC again during the count-in calls it off.
+            Looper cancelled;
+            cancelled.prepare (sr, 10.0);
+            cancelled.startRecording (clock + 10 * lb);
+            feed (cancelled, 2);
+            cancelled.cancelStart();
+            feed (cancelled, 20);
+            check (cancelled.getState() == Looper::State::idle, "Count-in can be called off");
+        }
+
+        {
             // Overdub: an impulse heard at clock 5000 must land where the loop was then,
             // allowing for the round trip latency.
             Looper looper;
@@ -273,6 +303,113 @@ namespace FxSelfTest
             LoopPlayer::blockClock = 0;
         }
 
+        {
+            // Sync: a loop anchored at 12000, playing at clock 12345 (position 345), realigned to
+            // anchor 12300 jumps to position 45 - blending over 30 ms, not jumping in one sample.
+            const double rate = 48000.0;
+            auto clip = std::make_shared<LoopClip>();
+            clip->sampleRate = rate;
+            clip->data.setSize (1, 4000);
+            for (int i = 0; i < 4000; ++i)
+                clip->data.setSample (0, i, (float) i);
+
+            LoopPlayer player;
+            player.prepare (rate);
+            player.setClip (clip, 12000);
+            player.fadeTo (1.0f, 0.0);
+            LoopPlayer::blockClock = 12345;
+            juce::AudioBuffer<float> out (1, 2000);
+            out.clear();
+            player.process (out, 0, 1);
+            player.realign (12300);
+            out.clear();
+            player.process (out, 0, 2000);
+
+            const int blendLength = (int) (LoopPlayer::realignSeconds * rate);
+            float biggestStep = 0.0f;
+            for (int i = 1; i < blendLength; ++i)
+                biggestStep = juce::jmax (biggestStep, std::abs (out.getSample (0, i) - out.getSample (0, i - 1)));
+            const float after = out.getSample (0, 1999);   // past the blend: position 45 + 1999
+
+            check (std::abs (out.getSample (0, 0) - 346.0f) < 0.5f && biggestStep < 2.0f && std::abs (after - 2044.0f) < 0.5f,
+                   "Sync moves a loop into phase smoothly (starts at " + juce::String (out.getSample (0, 0), 1) + ", ends at "
+                       + juce::String (after, 1) + " expect 2044, biggest step " + juce::String (biggestStep, 2) + ")");
+            LoopPlayer::blockClock = 0;
+        }
+
+        {
+            // Start on the beat: a loop pressed at clock 900, due at 1000, stays silent until
+            // then and comes in from its first sample.
+            auto clip = std::make_shared<LoopClip>();
+            clip->sampleRate = 48000.0;
+            clip->data.setSize (1, 4000);
+            for (int i = 0; i < 4000; ++i)
+                clip->data.setSample (0, i, (float) (i + 1));
+
+            LoopPlayer player;
+            player.prepare (48000.0);
+            LoopPlayer::blockClock = 900;
+            player.setClip (clip, 1000);
+            player.fadeTo (1.0f, 0.0, 1000);
+            juce::AudioBuffer<float> out (1, 100);
+            out.clear();
+            player.process (out, 0, 100);
+            const float waiting = out.getMagnitude (0, 100);
+            LoopPlayer::blockClock = 1000;
+            out.clear();
+            player.process (out, 0, 100);
+            check (waiting == 0.0f && out.getSample (0, 0) == 1.0f && out.getSample (0, 99) == 100.0f,
+                   "A loop due on the next beat waits silently, then starts from its top (first sample "
+                       + juce::String (out.getSample (0, 0), 1) + ", expect 1)");
+            LoopPlayer::blockClock = 0;
+
+            // Grid every 500 samples from 1000, with 50 samples' grace for a late press.
+            const auto a = nextGridPoint (1700, 1000, 500.0, 50), b = nextGridPoint (1520, 1000, 500.0, 50),
+                       c = nextGridPoint (900, 1000, 500.0, 50), d = nextGridPoint (1560, 1000, 500.0, 50);
+            check (a == 2000 && b == 1500 && c == 1000 && d == 2000,
+                   "Next beat: " + juce::String (a) + " " + juce::String (b) + " " + juce::String (c) + " " + juce::String (d)
+                       + " (expect 2000 1500 1000 2000)");
+        }
+
+        // ---- More inputs ----
+        {
+            // A set with three inputs, the third a stereo pair on interface inputs 3+4, saves and loads as that.
+            const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory);
+            LiveSet set;
+            set.inputs.resize (3);
+            set.inputs[2].name = "Synth";
+            set.inputs[2].channel = 2;
+            set.inputs[2].stereo = true;
+            LiveSet back;
+            back.loadFromXml (*set.toXml (folder), folder);
+            check (back.inputs.size() == 3 && back.inputs[2].name == "Synth" && back.inputs[2].channel == 2 && back.inputs[2].stereo
+                       && back.inputs[1].channel == 1 && ! back.inputs[1].stereo,
+                   "A set keeps its three inputs, the third on inputs 3+4 stereo (" + juce::String ((int) back.inputs.size()) + " inputs)");
+
+            // Sets saved before inputs could be picked: "source 2" was inputs 1+2 stereo; one input saved means one input.
+            auto old = juce::parseXML ("<LiveRigSet version=\"3\"><Input name=\"Mic\" source=\"2\"/></LiveRigSet>");
+            LiveSet oldSet;
+            oldSet.loadFromXml (*old, folder);
+            check (oldSet.inputs.size() == 1 && oldSet.inputs[0].channel == 0 && oldSet.inputs[0].stereo,
+                   "An older set's \"inputs 1+2 stereo\" loads as that");
+
+            // An input on the 3+4 pair hears interface inputs 3 and 4, nothing else.
+            InputChannel input;
+            input.prepare (48000.0, 64);
+            input.setMonitor (true);
+            input.setSource (2, true);
+            juce::AudioBuffer<float> in (4, 64), out (2, 64), recordBus (2, 64);
+            for (int ch = 0; ch < 4; ++ch)
+                for (int k = 0; k < 64; ++k)
+                    in.setSample (ch, k, 0.1f * (float) (ch + 1));
+            out.clear();
+            recordBus.clear();
+            input.process (in, 4, out, 0, 64, recordBus);
+            check (std::abs (out.getSample (0, 63) - 0.3f) < 0.001f && std::abs (out.getSample (1, 63) - 0.4f) < 0.001f,
+                   "Input on 3+4 stereo plays inputs 3 and 4 (L " + juce::String (out.getSample (0, 63), 3) + " R "
+                       + juce::String (out.getSample (1, 63), 3) + ", expect 0.300 0.400)");
+        }
+
         // ---- Tempo from a loop ----
         {
             check (TempoGuess::fromName ("Wonky Hip Hop Drum Loop 72 BPM __ The Sound") == 72.0, "Tempo read from \"...Drum Loop 72 BPM...\"");
@@ -285,6 +422,15 @@ namespace FxSelfTest
                 found.add (juce::String (o.bars) + "=" + juce::String (o.bpm, 1));
             check (found.contains ("2=60.0") && found.contains ("4=120.0") && found.contains ("3=90.0"),
                    "Tempo options for an 8 s loop: " + found.joinIntoString (", "));
+        }
+
+        {
+            // The first loop sets the tempo: 8.05 s near 72 BPM is 2 bars at 59.63 or 3 at 89.44 -> 2 bars;
+            // near 120 it's 4 bars at 119.25.
+            const auto slow = TempoGuess::nearest (8.05, 72.0), fast = TempoGuess::nearest (8.05, 120.0);
+            check (slow.bars == 2 && std::abs (slow.bpm - 59.63) < 0.01 && fast.bars == 4 && std::abs (fast.bpm - 119.25) < 0.01,
+                   "First loop's tempo: " + juce::String (slow.bars) + " bars at " + juce::String (slow.bpm, 2) + " near 72, "
+                       + juce::String (fast.bars) + " bars at " + juce::String (fast.bpm, 2) + " near 120");
         }
 
         // ---- Pack round trip: a set and its samples in one file, unpacked elsewhere ----
