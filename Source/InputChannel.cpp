@@ -96,10 +96,14 @@ void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
 
     const bool hear = monitor, record = armed, wet = recordWithFx;
     const int recordSamples = juce::jmin (numSamples, recordBus.getNumSamples());
+
+    // Loops are recorded at the channel's fader level, so a new loop comes in at the
+    // level you were hearing (mute aside: a muted input still records).
+    const float recordGain = targetGain.load();
     auto addToRecording = [&]
     {
         for (int ch = 0; ch < juce::jmin (2, recordBus.getNumChannels()); ++ch)
-            recordBus.addFrom (ch, 0, scratch, ch, 0, recordSamples);
+            recordBus.addFrom (ch, 0, scratch, ch, 0, recordSamples, recordGain);
     };
 
     if (record && ! wet)

@@ -35,7 +35,8 @@ namespace
         const auto options = juce::AudioFormatWriterOptions{}
                                  .withSampleRate (clip.sampleRate)
                                  .withNumChannels (clip.data.getNumChannels())
-                                 .withBitsPerSample (24);
+                                 .withBitsPerSample (32)
+                                 .withSampleFormat (juce::AudioFormatWriterOptions::SampleFormat::floatingPoint);   // headroom: a hot take is never clipped
         auto writer = wav.createWriterFor (stream, options);
         return writer != nullptr && writer->writeFromAudioSampleBuffer (clip.data, 0, clip.data.getNumSamples());
     }
@@ -360,6 +361,7 @@ void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRat
 
     masterGain.reset (sampleRate, 0.05);
     masterGain.setCurrentAndTargetValue (masterTarget);
+    outputLimiter.prepare (sampleRate);
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
@@ -402,6 +404,9 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
     {
         buffer.applyGain (info.startSample, info.numSamples, masterGain.getCurrentValue());
     }
+
+    // Safety limiter: nothing reaches the speakers above -0.5 dBFS, and nothing hard-clips.
+    outputLimiter.process (buffer, info.startSample, info.numSamples, outChannels);
 
     if (outChannels > 0) masterPeakL = juce::jmax (masterPeakL.load(), buffer.getMagnitude (0, info.startSample, info.numSamples));
     if (outChannels > 1) masterPeakR = juce::jmax (masterPeakR.load(), buffer.getMagnitude (1, info.startSample, info.numSamples));

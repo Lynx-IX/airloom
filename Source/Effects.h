@@ -15,6 +15,52 @@ inline constexpr DelayDivision delayDivisions[] = {
 };
 inline constexpr int numDelayDivisions = (int) std::size (delayDivisions);
 
+// Safety limiter for the master output. Below the ceiling it does nothing; above it
+// the level comes down at once and recovers over 150 ms, so nothing ever hard-clips
+// the speakers. Non-finite samples (a plug-in gone wrong) are silenced.
+class OutputLimiter
+{
+public:
+    static constexpr float ceiling = 0.944f;   // -0.5 dBFS
+
+    void prepare (double sampleRate)
+    {
+        release = std::exp (-1.0f / (0.15f * (float) sampleRate));
+        gain = 1.0f;
+    }
+
+    // Returns the deepest gain this block used (1 = untouched).
+    float process (juce::AudioBuffer<float>& buffer, int start, int numSamples, int numChannels)
+    {
+        float lowest = 1.0f;
+
+        for (int i = start; i < start + numSamples; ++i)
+        {
+            float peak = 0.0f;
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                auto& x = buffer.getWritePointer (ch)[i];
+                if (! std::isfinite (x))
+                    x = 0.0f;
+                peak = juce::jmax (peak, std::abs (x));
+            }
+
+            const float target = peak > ceiling ? ceiling / peak : 1.0f;
+            gain = target < gain ? target : target + (gain - target) * release;
+            lowest = juce::jmin (lowest, gain);
+
+            if (gain < 1.0f)
+                for (int ch = 0; ch < numChannels; ++ch)
+                    buffer.getWritePointer (ch)[i] *= gain;
+        }
+
+        return lowest;
+    }
+
+private:
+    float release = 0.999f, gain = 1.0f;
+};
+
 // The effect settings for one input or row, as plain values that can be saved.
 struct FxSettings
 {

@@ -159,10 +159,11 @@ void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample,
         peakR = juce::jmax (peakR.load(), stereo.getMagnitude (1, 0, n));
 
         const int recordable = juce::jmax (0, juce::jmin (n, recordBus.getNumSamples() - done));
+        // Recorded at the fader level, so a new loop matches what you were hearing.
         auto addToRecording = [&]
         {
             for (int ch = 0; ch < juce::jmin (2, recordBus.getNumChannels()); ++ch)
-                recordBus.addFrom (ch, done, stereo, ch, 0, recordable);
+                recordBus.addFrom (ch, done, stereo, ch, 0, recordable, targetGain.load());
         };
 
         if (record && ! wet)

@@ -397,6 +397,50 @@ namespace FxSelfTest
             check (tail > 0.001f, "Channel reverb tail rings out after the channel stops (" + juce::String (juce::Decibels::gainToDecibels (tail), 1) + " dB)");
         }
 
+        // ---- Output limiter and recording level ----
+        {
+            OutputLimiter limiter;
+            limiter.prepare (48000.0);
+            juce::AudioBuffer<float> loud (2, 48000), quiet (2, 48000);
+            for (int i = 0; i < 48000; ++i)
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    loud.setSample (ch, i, 4.0f * std::sin ((float) i * 0.05f));
+                    quiet.setSample (ch, i, 0.5f * std::sin ((float) i * 0.05f));
+                }
+            loud.setSample (0, 100, std::numeric_limits<float>::quiet_NaN());
+            const auto quietCopy = quiet;
+            limiter.process (loud, 0, 48000, 2);
+            OutputLimiter fresh;
+            fresh.prepare (48000.0);
+            fresh.process (quiet, 0, 48000, 2);
+
+            bool finite = true;
+            for (int i = 0; i < 48000; ++i)
+                finite = finite && std::isfinite (loud.getSample (0, i));
+            float change = 0.0f;
+            for (int i = 0; i < 48000; ++i)
+                change = juce::jmax (change, std::abs (quiet.getSample (0, i) - quietCopy.getSample (0, i)));
+
+            check (finite && loud.getMagnitude (0, 48000) <= OutputLimiter::ceiling + 0.0001f && change == 0.0f,
+                   "Master limiter holds a +12 dB signal at -0.5 dBFS, silences NaN, leaves normal levels alone (peak "
+                       + juce::String (loud.getMagnitude (0, 48000), 3) + ")");
+
+            // An input is recorded at its fader level, so loops come in as loud as they were heard.
+            InputChannel input;
+            input.prepare (48000.0, 512);
+            input.setArmed (true);
+            input.setGain (0.5f);
+            juce::AudioBuffer<float> in (2, 512), out (2, 512), recordBus (2, 512);
+            in.clear();
+            in.setSample (0, 10, 1.0f);
+            out.clear();
+            recordBus.clear();
+            input.process (in, 2, out, 0, 512, recordBus);
+            check (std::abs (recordBus.getSample (0, 10) - 0.5f) < 0.001f,
+                   "Recording follows the input fader (a 1.0 sample at -6 dB records as " + juce::String (recordBus.getSample (0, 10), 3) + ")");
+        }
+
         // ---- MIDI assignments travel with the set ----
         {
             auto set = LiveSet::makeDefault();

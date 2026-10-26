@@ -281,6 +281,7 @@ private:
 
     struct Takeover { bool locked = false; float last = -1.0f; };
     std::map<juce::String, Takeover> takeover;
+    OutputLimiter outputLimiter;
     std::map<int, bool> ledState;   // MidiMix button lights as last sent
 
     struct PendingMidi { juce::String device; juce::MidiMessage message; };
