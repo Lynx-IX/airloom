@@ -118,6 +118,13 @@ MainComponent::MainComponent()
     if (auto xml = props->getXmlValue ("midiMap"))
         midiMap.fromXml (*xml);
 
+    // Groups used to take MidiMix faders and mutes by position; that's gone, as are
+    // assignments for the set's controls, which now come with the set itself.
+    midiMap.removeIf ([] (const juce::String& t)
+    {
+        return MidiMap::isSetTarget (t) || (t.startsWith ("fader.") && t != "fader.master") || t.startsWith ("mute.");
+    });
+
     juce::Desktop::getInstance().setGlobalScaleFactor ((float) props->getDoubleValue ("uiScale", 1.0));
 
     for (auto& e : engines)
@@ -150,6 +157,13 @@ MainComponent::MainComponent()
     rowsViewport.setScrollBarThickness (10);
     rowsContent.addAndMakeVisible (inputsView);
     inputsView.onInstrumentStripCreated = [this] (int i, SourceStrip& s) { setupInstrumentStrip (i, s); };
+    inputsView.onLayoutChanged = [this] { layoutRows(); };
+    inputsView.resizer.onColumnsChanged = [this] (int columns)
+    {
+        liveSet.inputsColumns = columns;
+        layoutRows();
+        saveSession();
+    };
     inputsView.addInstrumentButton.onClick = [this] { addInstrument(); };
     setupInputs();
     addAndMakeVisible (addRowButton);
@@ -168,6 +182,7 @@ MainComponent::MainComponent()
 
     addAndMakeVisible (stopAllButton);
     stopAllButton.onClick = [this] { stopAll (fadeTimeSlider.getValue()); };
+    stopAllButton.setColour (juce::TextButton::buttonColourId, Theme::danger.darker (1.2f));
     stopAllButton.onRightClick = [this] { showLearnMenu ("stopAll", "Stop all"); };
 
     addAndMakeVisible (setButton);
@@ -192,6 +207,12 @@ MainComponent::MainComponent()
     addAndMakeVisible (bpmLabel);
     addAndMakeVisible (bpmSlider);
     addAndMakeVisible (tapButton);
+
+    addAndMakeVisible (setTimerButton);
+    setTimerButton.setTooltip ("Start or pause the set timer. Right-click to reset it.");
+    setTimerButton.setWantsKeyboardFocus (false);
+    setTimerButton.onClick = [this] { toggleSetTimer(); };
+    setTimerButton.onRightClick = [this] { showSetTimerMenu(); };
     bpmLabel.setColour (juce::Label::textColourId, Theme::textDim);
     bpmLabel.setJustificationType (juce::Justification::centredRight);
     bpmSlider.setSliderStyle (juce::Slider::LinearBar);
@@ -862,6 +883,7 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
     const auto file = liveSet.file;
     liveSet.loadFromXml (xml, baseFolder);
     liveSet.file = file;
+    applySetMidi();
 
     for (size_t i = 0; i < liveSet.rows.size(); ++i)
         liveSet.rows[i].engine = (int) i;
@@ -870,7 +892,7 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
     masterTarget = dbToGain (liveSet.masterDb);
     fadeTimeSlider.setValue (liveSet.fadeSeconds);
     bpmSlider.setValue (liveSet.bpm, juce::dontSendNotification);
-    inputsView.lengthBox.setSelectedId ((int) liveSet.loopLength + 1, juce::dontSendNotification);
+    looperBar.lengthBox.setSelectedId ((int) liveSet.loopLength + 1, juce::dontSendNotification);
     looper.stopOverdub();
     dubTargetId = overdubSlotId = -1;
     firstLoopLength = 0;
@@ -935,7 +957,8 @@ void MainComponent::rebuildRows()
         view->index = i;
         rowsContent.addAndMakeVisible (view);
 
-        const auto faderTarget = "fader." + juce::String (i);
+        const auto faderTarget = "grp." + r.uid + ".fader";
+        const auto muteTarget = "grp." + r.uid + ".mute";
         auto& strip = view->strip;
         strip.fader.setValue (r.faderDb, juce::dontSendNotification);
         engineFor (r).setGain (dbToGain (r.faderDb));
@@ -950,7 +973,7 @@ void MainComponent::rebuildRows()
         strip.fader.onRightClick = [this, faderTarget, i] { showLearnMenu (faderTarget, liveSet.rows[(size_t) i].name + " fader"); };
 
         strip.muteButton.onClick = [this, i] { setRowMuted (i, rowViews[i]->strip.muteButton.getToggleState()); };
-        strip.muteButton.onRightClick = [this, i] { showLearnMenu ("mute." + juce::String (i), liveSet.rows[(size_t) i].name + " mute"); };
+        strip.muteButton.onRightClick = [this, muteTarget, i] { showLearnMenu (muteTarget, liveSet.rows[(size_t) i].name + " mute"); };
         strip.muteButton.setToggleState (r.muted, juce::dontSendNotification);
         engineFor (r).setMuted (r.muted);
         engineFor (r).getFx().setSettings (r.fx);
@@ -1010,6 +1033,24 @@ void MainComponent::rebuildRows()
         view->onHeaderMenu = [this, i] { showRowMenu (i); };
         view->onAddChannel = [this, i] { addChannel (i); };
         view->onLayoutChanged = [this] { layoutRows(); };
+        view->resizer.onColumnsChanged = [this, i] (int columns)
+        {
+            if (i < (int) liveSet.rows.size())
+            {
+                liveSet.rows[(size_t) i].columns = columns;
+                updateRowViews();
+                layoutRows();
+                saveSession();
+            }
+        };
+        view->onChannelLearn = [this, i] (int s, const juce::String& control)
+        {
+            const auto& slot = liveSet.rows[(size_t) i].slots[(size_t) s];
+            const auto name = slot.label.isNotEmpty() ? slot.label : slot.file.getFileNameWithoutExtension();
+            const auto what = control == "play" ? (slot.oneShot ? "play" : "play / stop") : control == "xf" ? "crossfade" : "volume";
+            showLearnMenu ("ch." + slot.uid + "." + control, name + " " + what);
+        };
+
         view->onVolume = [this, i] (int s, double db)
         {
             auto& row = liveSet.rows[(size_t) i];
@@ -1030,32 +1071,129 @@ void MainComponent::rebuildRows()
 
 void MainComponent::layoutRows()
 {
-    // Inputs across the top; then the groups flow left to right like words in a
-    // paragraph, each only as wide as its channels, wrapping onto a new line when
-    // the next one doesn't fit. Anything below the window scrolls.
-    constexpr int inputsHeight = 290;
-    const int width = rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2;
+    const auto bounds = arrangeGroups();
+    int bottom = 0;
 
-    inputsView.setBounds (0, 0, width, inputsHeight);
-    int x = 0, y = inputsHeight + rowGap, lineHeight = 0;
-
-    for (int i = 0; i < rowViews.size() && i < (int) liveSet.rows.size(); ++i)
+    for (const auto& [item, r] : bounds)
     {
-        const auto size = RowView::preferredSize ((int) liveSet.rows[(size_t) i].slots.size(), width);
-
-        if (x > 0 && x + size.x > width)
-        {
-            x = 0;
-            y += lineHeight + rowGap;
-            lineHeight = 0;
-        }
-
-        rowViews[i]->setBounds (x, y, size.x, size.y);
-        x += size.x + rowGap;
-        lineHeight = juce::jmax (lineHeight, size.y);
+        juce::Component* view = item < 0 ? static_cast<juce::Component*> (&inputsView) : rowViews[item];
+        view->setBounds (r);
+        bottom = juce::jmax (bottom, r.getBottom());
     }
 
-    rowsContent.setSize (width, y + lineHeight);
+    inputsView.setFixedColumns (liveSet.inputsColumns > 0);
+    rowsContent.setSize (rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2, bottom + 40);
+}
+
+std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, juce::Point<int> movingTo) const
+{
+    // Groups (row indices, -1 for the Inputs + Looper) sit where they were put, then
+    // float up until they rest under whatever is above them, like a dashboard grid:
+    // gaps beside a tall group fill in, and a group dropped onto another pushes it down.
+    const int width = rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2;
+    const int rows = juce::jmin (rowViews.size(), (int) liveSet.rows.size());
+
+    struct Group { int item; juce::Point<int> want; juce::Point<int> size; };
+    std::vector<Group> groups;
+
+    auto sizeOf = [&] (int item)
+    {
+        return item < 0 ? InputsView::preferredSize (inputsView.getNumStrips(), width, liveSet.inputsColumns)
+                        : RowView::preferredSize ((int) liveSet.rows[(size_t) item].slots.size(), width,
+                                                  liveSet.rows[(size_t) item].columns);
+    };
+
+    groups.push_back ({ -1, liveSet.inputsPosition, sizeOf (-1) });
+    for (int i = 0; i < rows; ++i)
+        groups.push_back ({ i, liveSet.rows[(size_t) i].position, sizeOf (i) });
+
+    // A set that has never been arranged: inputs first, then the rows, left to right, wrapping.
+    if (std::all_of (groups.begin(), groups.end(), [] (const Group& g) { return g.want.x < 0; }))
+    {
+        int x = 0, y = 0, lineHeight = 0;
+        for (auto& g : groups)
+        {
+            if (x > 0 && x + g.size.x > width)
+            {
+                x = 0;
+                y += lineHeight + rowGap;
+                lineHeight = 0;
+            }
+            g.want = { x, y };
+            x += g.size.x + rowGap;
+            lineHeight = juce::jmax (lineHeight, g.size.y);
+        }
+    }
+
+    for (auto& g : groups)
+    {
+        if (g.item == moving)
+            g.want = movingTo;
+        else if (g.want.x < 0)
+            g.want = { 0, 1 << 24 };   // new groups go to the bottom
+    }
+
+    // Top to bottom, then left to right; a group being dropped wins a tie.
+    std::stable_sort (groups.begin(), groups.end(), [moving] (const Group& a, const Group& b)
+    {
+        if (a.want.y != b.want.y) return a.want.y < b.want.y;
+        if ((a.item == moving) != (b.item == moving)) return a.item == moving;
+        return a.want.x < b.want.x;
+    });
+
+    std::map<int, juce::Rectangle<int>> placed;
+    for (const auto& g : groups)
+    {
+        const int x = juce::jlimit (0, juce::jmax (0, width - g.size.x), g.want.x);
+        int y = 0;
+        for (const auto& [other, r] : placed)
+            if (x < r.getRight() + rowGap && r.getX() < x + g.size.x + rowGap)
+                y = juce::jmax (y, r.getBottom() + rowGap);
+
+        placed[g.item] = { x, y, g.size.x, g.size.y };
+    }
+
+    return placed;
+}
+
+juce::Point<int> MainComponent::droppedGroupPosition (const SourceDetails& details, int& item) const
+{
+    // Where the dragged group's top-left corner would go, snapped to line up with the others.
+    const auto text = details.description.toString();
+    juce::Point<int> grab;
+
+    if (text == InputsView::dragId)
+    {
+        item = -1;
+        grab = inputsView.grabOffset;
+    }
+    else
+    {
+        item = text.fromFirstOccurrenceOf (RowView::dragPrefix, false, false).getIntValue();
+        if (juce::isPositiveAndBelow (item, rowViews.size()))
+            grab = rowViews[item]->grabOffset;
+    }
+
+    auto pos = rowsContent.getLocalPoint (this, details.localPosition) - grab;
+
+    int snapX = 0, best = std::abs (pos.x);
+    auto consider = [&] (int candidate)
+    {
+        if (std::abs (pos.x - candidate) < best) { best = std::abs (pos.x - candidate); snapX = candidate; }
+    };
+    for (auto* c : rowsContent.getChildren())
+    {
+        const bool self = (item < 0 && c == &inputsView) || (item >= 0 && item < rowViews.size() && c == rowViews[item]);
+        if (! self)
+        {
+            consider (c->getX());
+            consider (c->getRight() + rowGap);
+        }
+    }
+    if (best < 24)
+        pos.x = snapX;
+
+    return { juce::jmax (0, pos.x), juce::jmax (0, pos.y) };
 }
 
 void MainComponent::updateRowViews()
@@ -1067,6 +1205,14 @@ void MainComponent::updateRowViews()
         const auto& r = liveSet.rows[(size_t) i];
         auto& engine = *engines[(size_t) r.engine];
         rowViews[i]->update (r, [&engine] (int id) { return engine.isFadingIn (id); }, now);
+
+        for (int s = 0; s < (int) r.slots.size(); ++s)
+            if (auto* card = rowViews[i]->getChannelCard (s))
+            {
+                const auto prefix = "ch." + r.slots[(size_t) s].uid + ".";
+                card->setMidiAssigned (midiMap.get (prefix + "play").isValid() || midiMap.get (prefix + "xf").isValid()
+                                       || midiMap.get (prefix + "vol").isValid());
+            }
     }
 }
 
@@ -1121,9 +1267,6 @@ void MainComponent::showRowMenu (int row)
     m.addSubMenu ("Colour", colours);
 
     m.addSeparator();
-    m.addItem (4, "Move up", row > 0);
-    m.addItem (5, "Move down", row < (int) liveSet.rows.size() - 1);
-    m.addSeparator();
     m.addItem (6, "Remove row");
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (rowViews[row]), [this, row] (int choice)
@@ -1157,13 +1300,6 @@ void MainComponent::showRowMenu (int row)
         {
             rw.colour = choice - 50;
             updateRowViews();
-            saveSession();
-        }
-
-        if (choice == 4 || choice == 5)
-        {
-            std::swap (liveSet.rows[(size_t) row], liveSet.rows[(size_t) (row + (choice == 4 ? -1 : 1))]);
-            rebuildRows();
             saveSession();
         }
 
@@ -1507,19 +1643,20 @@ void MainComponent::setupInputs()
         s.onArm = [this, i] { setArmed (i, ! liveSet.inputs[(size_t) i].armed); };
     }
 
-    inputsView.recButton.onClick = [this] { recPressed(); };
-    inputsView.recButton.onRightClick = [this] { showLearnMenu ("rec", "Record"); };
-    inputsView.dubButton.onClick = [this] { dubPressed(); };
-    inputsView.dubButton.onRightClick = [this] { showLearnMenu ("dub", "Overdub"); };
-    inputsView.undoButton.onClick = [this] { undoPressed(); };
-    inputsView.undoButton.onRightClick = [this] { showLearnMenu ("undo", "Undo overdub"); };
-    inputsView.lengthBox.onChange = [this]
+    looperBar.recButton.onClick = [this] { recPressed(); };
+    looperBar.recButton.onRightClick = [this] { showLearnMenu ("rec", "Record"); };
+    looperBar.dubButton.onClick = [this] { dubPressed(); };
+    looperBar.dubButton.onRightClick = [this] { showLearnMenu ("dub", "Overdub"); };
+    looperBar.undoButton.onClick = [this] { undoPressed(); };
+    looperBar.undoButton.onRightClick = [this] { showLearnMenu ("undo", "Undo overdub"); };
+    looperBar.lengthBox.onChange = [this]
     {
-        liveSet.loopLength = (LiveSet::LoopLength) (inputsView.lengthBox.getSelectedId() - 1);
+        liveSet.loopLength = (LiveSet::LoopLength) (looperBar.lengthBox.getSelectedId() - 1);
         saveSession();
     };
 
     disableKeyboardFocus (inputsView);
+    addAndMakeVisible (looperBar);
 }
 
 void MainComponent::applyInput (int i)
@@ -1701,7 +1838,12 @@ void MainComponent::setupInstrumentStrip (int i, SourceStrip& s)
         inst.padRoot = fluteKeys[k].root;
         inst.padScale = fluteKeys[k].scale;
         applyInstrument (i);
-        infoMessage = "Fire pads: " + instrumentDetail (i).fromFirstOccurrenceOf ("-  ", false, false).upToFirstOccurrenceOf ("  -", false, false);
+        PadLayout keys;
+        keys.root = inst.padRoot;
+        keys.scale = inst.padScale;
+        infoMessage = "Fire pads: " + keys.describe() + "  -  teal pads are " + PadLayout::noteNames[keys.root]
+                    + ", amber pads are " + keys.describeRelative().upToFirstOccurrenceOf (" ", false, false)
+                    + " (the relative " + keys.describeRelative().fromFirstOccurrenceOf (" ", false, false) + ")";
         saveSession();
     };
 
@@ -2021,21 +2163,8 @@ void MainComponent::updateFireLights (bool allOff)
         return;
 
     // The Fire plays the first instrument listening to it; light its scale on the pads.
-    const PadLayout* layout = nullptr;
     PadLayout chosen;
-    for (int i = 0; i < (int) liveSet.instruments.size() && ! allOff; ++i)
-    {
-        const auto& inst = liveSet.instruments[(size_t) i];
-        if (instrumentEngines[(size_t) i]->getPlugin() != nullptr
-            && (inst.midiSource.isEmpty() || inst.midiSource.containsIgnoreCase ("FIRE")))
-        {
-            chosen.root = inst.padRoot;
-            chosen.scale = inst.padScale;
-            chosen.octave = inst.padOctave;
-            layout = &chosen;
-            break;
-        }
-    }
+    const PadLayout* layout = ! allOff && currentKey (chosen) ? &chosen : nullptr;
 
     // Akai Fire pad colours: F0 47 7F 43 65 <length> then (pad, red, green, blue) per pad, 0-127 each.
     juce::MemoryBlock data;
@@ -2047,7 +2176,8 @@ void MainComponent::updateFireLights (bool allOff)
         juce::uint8 rgb[3] = { 0, 0, 0 };
         if (layout != nullptr)
         {
-            if (layout->isRootPad (pad))      { rgb[0] = 20;  rgb[1] = 110; rgb[2] = 100; }   // teal: the key's root
+            if (layout->isRootPad (pad))              { rgb[0] = 20;  rgb[1] = 110; rgb[2] = 100; }   // teal: the key's root
+            else if (layout->isRelativeRootPad (pad)) { rgb[0] = 120; rgb[1] = 55;  rgb[2] = 0;   }   // amber: relative major/minor root
             else                              { rgb[0] = 18;  rgb[1] = 18;  rgb[2] = 22;  }   // dim: other scale notes
         }
 
@@ -2114,6 +2244,42 @@ void MainComponent::recPressed()
     repaint();
 }
 
+bool MainComponent::currentKey (PadLayout& key) const
+{
+    // The key of the first instrument the Fire plays: the one being performed in.
+    for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
+    {
+        const auto& inst = liveSet.instruments[(size_t) i];
+        if (instrumentEngines[(size_t) i]->getPlugin() != nullptr
+            && (inst.midiSource.isEmpty() || inst.midiSource.containsIgnoreCase ("FIRE")))
+        {
+            key.root = inst.padRoot;
+            key.scale = inst.padScale;
+            key.octave = inst.padOctave;
+            return true;
+        }
+    }
+    return false;
+}
+
+juce::String MainComponent::nextLoopLabel (const Row& row) const
+{
+    // Named after the key it was played in and numbered within that key, with "Loop"
+    // first so it can't be mistaken for a sample in that key:
+    // "Loop A minor 1", "Loop A minor 2", "Loop Bb major 1". "Loop 3" when there's no key.
+    PadLayout key;
+    const auto keyName = currentKey (key) ? key.keyName() : juce::String();
+    const auto name = keyName.isEmpty() ? juce::String ("Loop") : "Loop " + keyName;
+
+    int highest = 0;
+    for (const auto& s : row.slots)
+        if (s.file != juce::File() && s.label.startsWith (name + " ")
+            && s.label.substring (name.length() + 1).containsOnly ("0123456789"))
+            highest = juce::jmax (highest, s.label.substring (name.length() + 1).getIntValue());
+
+    return name + " " + juce::String (highest + 1);
+}
+
 void MainComponent::collectFinishedTake()
 {
     juce::AudioBuffer<float> audio;
@@ -2131,7 +2297,7 @@ void MainComponent::collectFinishedTake()
     const int rowIndex = findOrCreateLiveLoopsRow();
     if (rowIndex < 0)
     {
-        errorMessage = "No room for a Live Loops row (8 rows max) - remove a row to record";
+        errorMessage = "No room for a loops group (8 groups max, one per MidiMix fader) - remove one to record";
         return;
     }
 
@@ -2140,7 +2306,6 @@ void MainComponent::collectFinishedTake()
     clip->data = std::move (audio);
 
     auto& row = liveSet.rows[(size_t) rowIndex];
-    const auto taken = std::count_if (row.slots.begin(), row.slots.end(), [] (const Slot& s) { return s.file != juce::File(); });
 
     // The first empty channel in the row, or a new one.
     auto it = std::find_if (row.slots.begin(), row.slots.end(), [] (const Slot& s) { return s.file == juce::File(); });
@@ -2152,8 +2317,8 @@ void MainComponent::collectFinishedTake()
 
     auto& slot = *it;
     slot = {};
-    slot.label = "Loop " + juce::String ((int) taken + 1);
-    slot.file = recordingsFolder().getNonexistentChildFile ("Loop " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"), ".wav");
+    slot.label = nextLoopLabel (row);
+    slot.file = recordingsFolder().getNonexistentChildFile (slot.label + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"), ".wav");
     clip->file = slot.file;
     slot.liveClip = clip;
 
@@ -2179,18 +2344,42 @@ void MainComponent::collectFinishedTake()
 
 int MainComponent::findOrCreateLiveLoopsRow()
 {
+    // Each key gets its own loops group ("Loops Bb major"); "Live Loops" when there's no key.
+    PadLayout key;
+    const auto keyName = currentKey (key) ? key.keyName() : juce::String();
+    const auto name = keyName.isEmpty() ? juce::String ("Live Loops") : "Loops " + keyName;
+
     for (int r = 0; r < (int) liveSet.rows.size(); ++r)
-        if (liveSet.rows[(size_t) r].name == "Live Loops")
+        if (liveSet.rows[(size_t) r].name == name)
             return r;
 
-    if ((int) liveSet.rows.size() >= LiveSet::maxRows)
+    if ((int) liveSet.rows.size() >= LiveSet::maxRows || freeEngine() < 0)
+    {
+        // No room for another group: use any existing loops group instead.
+        for (int r = 0; r < (int) liveSet.rows.size(); ++r)
+            if (liveSet.rows[(size_t) r].name == "Live Loops" || liveSet.rows[(size_t) r].name.startsWith ("Loops "))
+                return r;
         return -1;
+    }
 
-    auto r = LiveSet::makeRow ("Live Loops", false, 0);
+    auto r = LiveSet::makeRow (name, false, 0);
     r.engine = freeEngine();
-    r.colour = 4;   // rose, like the inputs
+
+    // A colour no other group is using, starting from rose (like the inputs).
+    r.colour = 4;
+    for (int c = 0; c < Theme::numRowColours; ++c)
+    {
+        const int candidate = (4 + c) % Theme::numRowColours;
+        if (std::none_of (liveSet.rows.begin(), liveSet.rows.end(), [candidate] (const Row& other) { return other.colour == candidate; }))
+        {
+            r.colour = candidate;
+            break;
+        }
+    }
+
     liveSet.rows.push_back (std::move (r));
     rebuildRows();
+    infoMessage = "New group for loops in " + (keyName.isEmpty() ? juce::String ("no key") : keyName);
     return (int) liveSet.rows.size() - 1;
 }
 
@@ -2353,7 +2542,7 @@ void MainComponent::updateLooperStatus()
             status << "\nDUB target: " << slot->label;
     }
 
-    inputsView.setLooperStatus (status, state == Looper::State::recording || state == Looper::State::finishing,
+    looperBar.setLooperStatus (status, state == Looper::State::recording || state == Looper::State::finishing,
                                 state == Looper::State::overdubbing);
 }
 
@@ -2839,6 +3028,18 @@ bool MainComponent::isInterestedInDragSource (const SourceDetails& details)
         || text.startsWith (RowView::dragPrefix);
 }
 
+juce::Component* MainComponent::groupViewAt (juce::Point<int> pos)
+{
+    if (auto* rv = rowViewAt (pos))
+        return rv;
+
+    if (auto* hit = getComponentAt (pos))
+        if (hit == &inputsView || hit->findParentComponentOfClass<InputsView>() != nullptr)
+            return &inputsView;
+
+    return nullptr;
+}
+
 RowView* MainComponent::rowViewAt (juce::Point<int> pos)
 {
     if (auto* hit = getComponentAt (pos))
@@ -2857,6 +3058,8 @@ void MainComponent::clearDropMarkers()
         rv->setDropMarker (-1);
         rv->setGroupDropSide (0);
     }
+    inputsView.setGroupDropSide (0);
+    rowsContent.showGhost ({}, {});
 }
 
 void MainComponent::itemDragMove (const SourceDetails& details)
@@ -2864,9 +3067,12 @@ void MainComponent::itemDragMove (const SourceDetails& details)
     // A group being moved: show which side of the group underneath it would land.
     if (details.description.toString().startsWith (RowView::dragPrefix))
     {
-        auto* target = rowViewAt (details.localPosition);
-        for (auto* rv : rowViews)
-            rv->setGroupDropSide (rv != target ? 0 : (rv->getLocalPoint (this, details.localPosition).x < rv->getWidth() / 2 ? -1 : 1));
+        int item = 0;
+        const auto pos = droppedGroupPosition (details, item);
+        const auto colour = item < 0 ? InputsView::colour
+                                     : juce::isPositiveAndBelow (item, (int) liveSet.rows.size())
+                                         ? Theme::rowColour (liveSet.rows[(size_t) item].colour) : Theme::accent;
+        rowsContent.showGhost (arrangeGroups (item, pos)[item], colour);
         return;
     }
 
@@ -2891,25 +3097,19 @@ void MainComponent::itemDropped (const SourceDetails& details)
 
     if (text.startsWith (RowView::dragPrefix))
     {
-        auto* target = rowViewAt (details.localPosition);
-        const int from = text.fromFirstOccurrenceOf (RowView::dragPrefix, false, false).getIntValue();
-        if (target == nullptr || ! juce::isPositiveAndBelow (from, (int) liveSet.rows.size()))
+        int item = 0;
+        const auto pos = droppedGroupPosition (details, item);
+        if (item >= (int) liveSet.rows.size())
             return;
 
-        // Before or after the group it was dropped on.
-        const bool after = target->getLocalPoint (this, details.localPosition).x >= target->getWidth() / 2;
-        int to = target->index + (after ? 1 : 0);
-        if (from < to)
-            --to;
-        if (to == from)
-            return;
+        // Keep every group where it now lands, so the arrangement stays as it is.
+        for (const auto& [i, r] : arrangeGroups (item, pos))
+        {
+            if (i < 0) liveSet.inputsPosition = r.getPosition();
+            else       liveSet.rows[(size_t) i].position = r.getPosition();
+        }
 
-        auto moving = std::move (liveSet.rows[(size_t) from]);
-        liveSet.rows.erase (liveSet.rows.begin() + from);
-        liveSet.rows.insert (liveSet.rows.begin() + to, std::move (moving));
-
-        rebuildRows();
-        infoMessage = liveSet.rows[(size_t) to].name + " moved (MidiMix fader " + juce::String (to + 1) + ")";
+        layoutRows();
         saveSession();
         return;
     }
@@ -3068,7 +3268,7 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
 
     if (learnTarget.isNotEmpty())
     {
-        const bool isFader = learnTarget.containsIgnoreCase ("fader");
+        const bool isFader = learnTarget.containsIgnoreCase ("fader") || learnTarget.endsWith (".vol");
 
         if ((isFader && m.isController()) || (! isFader && pressed))
         {
@@ -3085,6 +3285,45 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
 
     for (auto& target : midiMap.findTargets (device, m))
     {
+        const float proportion = (float) m.getControllerValue() / 127.0f;
+
+        // A channel: "ch.<uid>.play", ".xf" or ".vol".
+        if (target.startsWith ("ch."))
+        {
+            const auto uid = target.fromFirstOccurrenceOf ("ch.", false, false).upToLastOccurrenceOf (".", false, false);
+            const auto control = target.fromLastOccurrenceOf (".", false, false);
+            int r = -1, s = -1;
+            if (! findSlotByUid (uid, r, s))
+                continue;
+
+            if (control == "vol")
+            {
+                if (m.isController() && r < rowViews.size())
+                    if (auto* card = rowViews[r]->getChannelCard (s))
+                        applyFaderMidi (target, card->getVolumeSlider(), proportion);
+            }
+            else if (pressed && control == "play") playPressed (r, s);
+            else if (pressed && control == "xf")   crossfadePressed (r, s);
+            continue;
+        }
+
+        // A group: "grp.<uid>.fader" or ".mute".
+        if (target.startsWith ("grp."))
+        {
+            const auto uid = target.fromFirstOccurrenceOf ("grp.", false, false).upToLastOccurrenceOf (".", false, false);
+            const auto control = target.fromLastOccurrenceOf (".", false, false);
+            const auto it = std::find_if (liveSet.rows.begin(), liveSet.rows.end(), [&uid] (const Row& row) { return row.uid == uid; });
+            const int r = (int) std::distance (liveSet.rows.begin(), it);
+            if (it == liveSet.rows.end() || r >= rowViews.size())
+                continue;
+
+            if (control == "fader" && m.isController())
+                applyFaderMidi (target, rowViews[r]->strip, proportion);
+            else if (control == "mute" && pressed)
+                setRowMuted (r, ! it->muted);
+            continue;
+        }
+
         if (target.startsWith ("inputFader."))
         {
             if (const int i = target.getTrailingIntValue(); m.isController() && i < LiveSet::numInputs)
@@ -3126,24 +3365,15 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
             if (! m.isController())
                 continue;
 
-            const float v = (float) m.getControllerValue() / 127.0f;
             if (target == "fader.master")
-                applyFaderMidi (target, masterStrip, v);
-            else if (const int i = target.getTrailingIntValue(); i < rowViews.size())
-                applyFaderMidi (target, rowViews[i]->strip, v);
-
+                applyFaderMidi (target, masterStrip, proportion);
             continue;
         }
 
         if (! pressed)
             continue;
 
-        if (target.startsWith ("mute."))
-        {
-            if (const int i = target.getTrailingIntValue(); i < (int) liveSet.rows.size())
-                setRowMuted (i, ! liveSet.rows[(size_t) i].muted);
-        }
-        else if (target == "stopAll")
+        if (target == "stopAll")
         {
             stopAll (fadeTimeSlider.getValue());
         }
@@ -3161,26 +3391,36 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
 
 void MainComponent::applyFaderMidi (const juce::String& target, ChannelStrip& strip, float proportion)
 {
-    // Soft takeover: the hardware fader only takes control once it reaches the
-    // on-screen position, so a fader left somewhere else can't cause a jump.
+    applyFaderMidi (target, strip.fader, proportion, [&strip] (float p) { strip.setHardwarePosition (p); });
+}
+
+void MainComponent::applyFaderMidi (const juce::String& target, juce::Slider& fader, float proportion,
+                                    const std::function<void (float)>& showHardwarePosition)
+{
+    // Soft takeover: the hardware control only takes over once it reaches the
+    // on-screen position, so a knob left somewhere else can't cause a jump.
     auto& t = takeover[target];
-    const float current = (float) strip.fader.valueToProportionOfLength (strip.fader.getValue());
+    const float current = (float) fader.valueToProportionOfLength (fader.getValue());
+
+    // Moved on screen since the hardware last set it: the hardware has to catch up again.
+    if (t.locked && std::abs (current - t.last) > 0.02f)
+        t.locked = false;
 
     if (! t.locked)
     {
         const bool crossed = t.last >= 0.0f && (t.last - current) * (proportion - current) <= 0.0f;
         t.locked = std::abs (proportion - current) < 0.03f || crossed;
-        t.last = proportion;
     }
+    t.last = proportion;
 
     if (t.locked)
     {
-        strip.fader.setValue (strip.fader.proportionOfLengthToValue (proportion));
-        strip.setHardwarePosition (-1.0f);
+        fader.setValue (fader.proportionOfLengthToValue (proportion));
+        if (showHardwarePosition) showHardwarePosition (-1.0f);
     }
-    else
+    else if (showHardwarePosition)
     {
-        strip.setHardwarePosition (proportion);
+        showHardwarePosition (proportion);
     }
 }
 
@@ -3193,13 +3433,23 @@ void MainComponent::showLearnMenu (const juce::String& target, const juce::Strin
     m.addItem (1, "Learn MIDI control");
     m.addItem (2, "Clear MIDI", binding.isValid());
     m.addSeparator();
-    m.addItem (3, "Reset all MIDI to MidiMix defaults");
+    m.addItem (3, "Clear all MIDI assignments");
 
     m.showMenuAsync (juce::PopupMenu::Options(), [this, target, label] (int r)
     {
         if (r == 1) { learnTarget = target; learnLabel = label; }
         if (r == 2) { midiMap.clear (target); saveMidiMap(); }
-        if (r == 3) { midiMap.setDefaults(); saveMidiMap(); }
+        if (r == 3)
+        {
+            askChoice ("Clear all MIDI", "Remove every MIDI assignment? The MidiMix master fader and first two REC ARM buttons go back to their defaults.",
+                       { "Clear", "Cancel" }, [this] (int c)
+                       {
+                           if (c != 1) return;
+                           midiMap.setDefaults();
+                           saveMidiMap();
+                           updateRowViews();
+                       });
+        }
         updateMidiLeds();
         repaint();
     });
@@ -3210,34 +3460,127 @@ void MainComponent::updateMidiLeds (bool allOff)
     if (ledOutput == nullptr)
         return;
 
-    for (int i = 0; i < LiveSet::maxRows; ++i)
+    // Lights only make sense for buttons on the MidiMix itself.
+    std::map<int, bool> wanted;
+    auto want = [&] (const juce::String& target, bool lit)
     {
-        const auto b = midiMap.get ("mute." + juce::String (i));
-        if (! b.isValid() || ! b.isNote)
-            continue;
+        const auto b = midiMap.get (target);
+        if (b.isValid() && b.isNote
+            && (b.device.isEmpty() || b.device.removeCharacters (" ").containsIgnoreCase ("MIDIMix")))
+            wanted[b.number] = wanted[b.number] || lit;
+    };
 
-        // Lit = row is on, like the MidiMix in most DAWs.
-        const bool lit = ! allOff && i < (int) liveSet.rows.size() && ! liveSet.rows[(size_t) i].muted;
-        ledOutput->sendMessageNow (juce::MidiMessage::noteOn (1, b.number, (juce::uint8) (lit ? 127 : 0)));
+    for (const auto& row : liveSet.rows)
+    {
+        want ("grp." + row.uid + ".mute", ! row.muted);   // lit = group is on, like most DAWs
+        for (const auto& slot : row.slots)
+            want ("ch." + slot.uid + ".play", slot.playing);
     }
-
-    // REC ARM buttons light while their input is armed.
     for (int i = 0; i < LiveSet::numInputs; ++i)
+        want ("arm." + juce::String (i), liveSet.inputs[(size_t) i].armed);
+
+    if (allOff)
+        for (auto& [note, lit] : wanted)
+            lit = false;
+
+    // Turn off lights for buttons that no longer have a job, then send what changed.
+    for (auto& [note, lit] : ledState)
+        if (lit && wanted.find (note) == wanted.end())
+            wanted[note] = false;
+
+    for (auto& [note, lit] : wanted)
     {
-        const auto b = midiMap.get ("arm." + juce::String (i));
-        if (b.isValid() && b.isNote)
-            ledOutput->sendMessageNow (juce::MidiMessage::noteOn (1, b.number,
-                                                                  (juce::uint8) (! allOff && liveSet.inputs[(size_t) i].armed ? 127 : 0)));
+        auto it = ledState.find (note);
+        if (it == ledState.end() || it->second != lit)
+            ledOutput->sendMessageNow (juce::MidiMessage::noteOn (1, note, (juce::uint8) (lit ? 127 : 0)));
+        ledState[note] = lit;
     }
+}
+
+void MainComponent::applySetMidi()
+{
+    // The set brings its own channel and group assignments.
+    midiMap.removeIf ([] (const juce::String& t) { return MidiMap::isSetTarget (t); });
+    if (liveSet.midi != nullptr)
+        midiMap.addFromXml (*liveSet.midi);
+    takeover.clear();
+    updateMidiLeds();
+}
+
+bool MainComponent::findSlotByUid (const juce::String& uid, int& row, int& slot) const
+{
+    for (int r = 0; r < (int) liveSet.rows.size(); ++r)
+        for (int i = 0; i < (int) liveSet.rows[(size_t) r].slots.size(); ++i)
+            if (liveSet.rows[(size_t) r].slots[(size_t) i].uid == uid)
+            {
+                row = r;
+                slot = i;
+                return true;
+            }
+    return false;
 }
 
 void MainComponent::saveMidiMap()
 {
-    settings.getUserSettings()->setValue ("midiMap", midiMap.toXml().get());
+    // The computer keeps its own controls; the set keeps its channels' and groups'.
+    settings.getUserSettings()->setValue ("midiMap", midiMap.toXml ([] (const juce::String& t) { return ! MidiMap::isSetTarget (t); }).get());
+    liveSet.midi = std::shared_ptr<juce::XmlElement> (midiMap.toXml ([] (const juce::String& t) { return MidiMap::isSetTarget (t); }).release());
+    saveSession();
+}
+
+double MainComponent::setTimerSeconds() const
+{
+    const double ms = setTimerRunning ? juce::Time::getMillisecondCounterHiRes() - setTimerStartMs : setTimerElapsedMs;
+    return ms * 0.001;
+}
+
+void MainComponent::toggleSetTimer()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes();
+
+    if (setTimerRunning)
+        setTimerElapsedMs = now - setTimerStartMs;   // pause, keeping the time so far
+    else
+        setTimerStartMs = now - setTimerElapsedMs;   // start, or carry on from a pause
+
+    setTimerRunning = ! setTimerRunning;
+    setTimerButton.setButtonText (setTimerRunning ? "STOP" : "START");
+    setTimerButton.setColour (juce::TextButton::buttonColourId, setTimerRunning ? Theme::accent.darker (0.2f) : Theme::raised);
+    setTimerButton.setColour (juce::TextButton::textColourOffId, setTimerRunning ? Theme::background : Theme::text);
+    repaint (setTimerArea);
+}
+
+void MainComponent::showSetTimerMenu()
+{
+    juce::PopupMenu m;
+    m.addItem (1, "Reset timer");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&setTimerButton), [this] (int r)
+    {
+        if (r != 1)
+            return;
+        setTimerElapsedMs = 0.0;
+        setTimerStartMs = juce::Time::getMillisecondCounterHiRes();
+        setTimerText = "0:00";
+        repaint (setTimerArea);
+    });
 }
 
 void MainComponent::timerCallback()
 {
+    updateMidiLeds();   // sends only lights that changed (channels starting, groups muting)
+
+    {
+        // The set timer reads h:mm:ss once it passes an hour.
+        const int total = (int) setTimerSeconds();
+        const auto text = total >= 3600 ? juce::String::formatted ("%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
+                                        : juce::String::formatted ("%d:%02d", total / 60, total % 60);
+        if (text != setTimerText)
+        {
+            setTimerText = text;
+            repaint (setTimerArea);
+        }
+    }
+
     std::vector<PendingMidi> incoming;
     midiFifo.read (midiFifo.getNumReady()).forEach ([&] (int index) { incoming.push_back (midiQueue[(size_t) index]); });
 
@@ -3264,7 +3607,6 @@ void MainComponent::timerCallback()
         bool recording = false;
         const double beats = currentBeatPosition (recording);
         beatIndicator.setPosition (beats, recording);
-        inputsView.beats.setPosition (beats, recording);
     }
 
     for (size_t i = 0; i < liveSet.instruments.size() && (int) i < inputsView.instrumentStrips.size(); ++i)
@@ -3306,23 +3648,72 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Theme::background);
 
+    // Header and footer bands, a step lighter than the workspace, with a hairline edge.
+    const int headerBottom = headerArea.getBottom() + 8, footerTop = messageArea.getY() - 6;
+    g.setGradientFill (juce::ColourGradient (Theme::panel.brighter (0.04f), 0.0f, 0.0f,
+                                             Theme::panel, 0.0f, (float) headerBottom, false));
+    g.fillRect (0, 0, getWidth(), headerBottom);
+    g.setColour (Theme::panel);
+    g.fillRect (0, footerTop, getWidth(), getHeight() - footerTop);
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.drawHorizontalLine (headerBottom, 0.0f, (float) getWidth());
+    g.drawHorizontalLine (footerTop, 0.0f, (float) getWidth());
+
     // Header: app name, set name and audio device status.
     auto header = headerArea;
+    auto logo = header.removeFromLeft (26).withSizeKeepingCentre (18, 18).toFloat();
+    g.setColour (Theme::accent.withAlpha (0.25f));
+    g.fillEllipse (logo.expanded (3.0f));
+    g.setColour (Theme::accent);
+    g.drawEllipse (logo, 2.0f);
+    g.fillEllipse (logo.reduced (5.5f));
+
+    header.removeFromLeft (6);
     g.setColour (Theme::text);
-    g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
-    g.drawText ("LIVE RIG", header.removeFromLeft (120), juce::Justification::centredLeft);
+    g.setFont (Theme::heading (19.0f, 0.18f));
+    g.drawText ("LIVE RIG", header.removeFromLeft (124), juce::Justification::centredLeft);
+
+    g.setColour (Theme::panelEdge);
+    g.fillRect (header.removeFromLeft (1).reduced (0, 6));
+    header.removeFromLeft (16);
 
     g.setColour (liveSet.file.existsAsFile() ? Theme::text : Theme::textDim);
-    g.setFont (juce::FontOptions (17.0f));
-    g.drawFittedText (liveSet.getName(), header.removeFromLeft (240), juce::Justification::centredLeft, 1);
+    g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+    g.drawFittedText (liveSet.getName(), header.removeFromLeft (220), juce::Justification::centredLeft, 1);
 
-    auto dot = header.removeFromLeft (14).withSizeKeepingCentre (10, 10).toFloat();
-    g.setColour (deviceOpen ? Theme::accent : Theme::danger);
+    // The set timer: big enough to read at a glance from the stage.
+    {
+        const bool started = setTimerRunning || setTimerElapsedMs > 0.0;
+        auto area = setTimerArea.toFloat();
+        g.setColour (juce::Colour (0xff08090b));
+        g.fillRoundedRectangle (area, 5.0f);
+        g.setColour (setTimerRunning ? Theme::accent.withAlpha (0.5f) : Theme::panelEdge);
+        g.drawRoundedRectangle (area.reduced (0.5f), 5.0f, 1.0f);
+
+        g.setColour (Theme::textDim);
+        g.setFont (Theme::heading (9.5f, 0.12f));
+        g.drawText ("SET", area.removeFromLeft (34.0f), juce::Justification::centred);
+
+        g.setColour (setTimerRunning ? Theme::accent : started ? Theme::warn : Theme::textDim);
+        g.setFont (juce::FontOptions (21.0f, juce::Font::bold));
+        g.drawText (setTimerText, area.withTrimmedRight (10.0f), juce::Justification::centredRight);
+    }
+
+    // Device status as a pill.
+    const auto statusColour = deviceOpen ? Theme::accent : Theme::danger;
+    g.setFont (juce::FontOptions (13.0f));
+    const int pillWidth = juce::jmin (header.getWidth(),
+                                      juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), deviceStatus) + 40);
+    auto pill = header.removeFromLeft (pillWidth).withSizeKeepingCentre (pillWidth, 26).toFloat();
+    g.setColour (statusColour.withAlpha (0.08f));
+    g.fillRoundedRectangle (pill, 13.0f);
+    g.setColour (statusColour.withAlpha (0.3f));
+    g.drawRoundedRectangle (pill.reduced (0.5f), 13.0f, 1.0f);
+    auto dot = pill.removeFromLeft (26.0f).withSizeKeepingCentre (8.0f, 8.0f);
+    g.setColour (statusColour);
     g.fillEllipse (dot);
-    header.removeFromLeft (8);
-    g.setColour (deviceOpen ? Theme::textDim : Theme::danger);
-    g.setFont (juce::FontOptions (14.0f));
-    g.drawText (deviceStatus, header, juce::Justification::centredLeft, true);
+    g.setColour (deviceOpen ? Theme::text.withAlpha (0.8f) : Theme::danger);
+    g.drawText (deviceStatus, pill.withTrimmedRight (12.0f), juce::Justification::centredLeft, true);
 
     // One status line: MIDI learn prompt, then errors, then confirmations, then a hint or MIDI devices.
     g.setFont (juce::FontOptions (15.0f));
@@ -3363,25 +3754,39 @@ void MainComponent::resized()
     setButton.setBounds (headerArea.removeFromRight (90).reduced (0, 2));
     headerArea.removeFromRight (8);
     addRowButton.setBounds (headerArea.removeFromRight (90).reduced (0, 2));
+    headerArea.removeFromRight (20);
+    setTimerButton.setBounds (headerArea.removeFromRight (72).reduced (0, 2));
+    headerArea.removeFromRight (8);
+    setTimerArea = headerArea.removeFromRight (120);
     headerArea.removeFromRight (12);
     area.removeFromTop (12);
 
-    // Bottom bar: stop all and fade time.
+    // Bottom bar: stop all, the looper, fade time, then tempo on the right.
     auto bottom = area.removeFromBottom (60);
-    stopAllButton.setBounds (bottom.removeFromLeft (200));
-    bottom.removeFromLeft (24);
-    auto controls = bottom.withSizeKeepingCentre (bottom.getWidth(), 36);
+    stopAllButton.setBounds (bottom.removeFromLeft (150));
+    bottom.removeFromLeft (20);
+    auto controls = bottom.withSizeKeepingCentre (bottom.getWidth(), 40);
 
-    auto tempo = controls.removeFromRight (380);
-    tapButton.setBounds (tempo.removeFromRight (70));
+    auto tempo = controls.removeFromRight (340);
+    tapButton.setBounds (tempo.removeFromRight (64));
     tempo.removeFromRight (8);
-    bpmSlider.setBounds (tempo.removeFromRight (120));
+    bpmSlider.setBounds (tempo.removeFromRight (110));
     tempo.removeFromRight (12);
-    beatIndicator.setBounds (tempo.removeFromRight (110).reduced (0, 6));
+    beatIndicator.setBounds (tempo.removeFromRight (106).reduced (0, 8));
     bpmLabel.setBounds (tempo);
+    controls.removeFromRight (24);
 
-    fadeTimeLabel.setBounds (controls.removeFromLeft (90));
-    fadeTimeSlider.setBounds (controls.removeFromLeft (juce::jmin (controls.getWidth() - 16, 360)));
+    auto fade = controls.removeFromRight (280);
+    fadeTimeLabel.setBounds (fade.removeFromLeft (76));
+    fadeTimeSlider.setBounds (fade);
+    controls.removeFromRight (20);
+
+    // The looper's buttons sit centred between STOP ALL and the fade time, with its
+    // status text trailing to the right (moved left if that text would be squeezed).
+    const int centredX = (stopAllButton.getRight() + controls.getRight()) / 2 - LooperBar::buttonsWidth / 2;
+    const int looperX = juce::jlimit (controls.getX(), juce::jmax (controls.getX(), controls.getRight() - LooperBar::buttonsWidth - 160), centredX);
+    const int looperWidth = juce::jmin (640, controls.getRight() - looperX);
+    looperBar.setBounds (controls.withX (looperX).withWidth (looperWidth));
 
     messageArea = area.removeFromBottom (30);
     area.removeFromBottom (6);

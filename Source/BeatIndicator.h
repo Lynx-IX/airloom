@@ -44,11 +44,13 @@ public:
             {
                 // Beat 1 at full strength, the others a little softer.
                 const float strength = currentLevel * (i == 0 ? 1.0f : 0.7f);
+                g.setColour (on.withAlpha (strength * 0.3f));
+                g.fillEllipse (dot.expanded (3.0f));
                 g.setColour (on.withAlpha (strength));
                 g.fillEllipse (dot.reduced (1.0f));
             }
 
-            g.setColour (i == 0 ? on.withAlpha (0.6f) : Theme::panelEdge);
+            g.setColour (i == 0 ? on.withAlpha (0.6f) : Theme::panelEdge.brighter (0.2f));
             g.drawEllipse (dot.reduced (0.5f), i == 0 ? 1.5f : 1.0f);
         }
     }

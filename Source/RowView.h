@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "ChannelStrip.h"
+#include "GroupResize.h"
 #include "LevelMeter.h"
 #include "LiveSet.h"
 #include "Theme.h"
@@ -19,7 +20,16 @@ public:
     int slotId = 0;
     std::function<void()> onPlay, onCrossfade, onMenu, onFx;
     std::function<void (double db)> onVolume;
+    std::function<void (const juce::String& control)> onLearn;   // right-click: "play", "xf" or "vol"
     LevelMeter meter;
+
+    juce::Slider& getVolumeSlider()   { return volume; }
+
+    // Shows a small MIDI tag when any of this channel's controls has a MIDI assignment.
+    void setMidiAssigned (bool assigned)
+    {
+        if (assigned != midiAssigned) { midiAssigned = assigned; repaint(); }
+    }
 
     ChannelCard()
     {
@@ -32,6 +42,9 @@ public:
         playButton.onClick = [this] { if (onPlay) onPlay(); };
         xfButton.onClick = [this] { if (onCrossfade) onCrossfade(); };
         fxButton.onClick = [this] { if (onFx) onFx(); };
+        playButton.onRightClick = [this] { if (onLearn) onLearn ("play"); };
+        xfButton.onRightClick = [this] { if (onLearn) onLearn ("xf"); };
+        volume.onRightClick = [this] { if (onLearn) onLearn ("vol"); };
         xfButton.setTooltip ("Crossfade to this channel: it fades in while the others in this row fade out");
         fxButton.setTooltip ("This channel's own effects (the row's FX still apply after them)");
 
@@ -67,7 +80,7 @@ public:
         volume.setVisible (hasSample);
         meter.setVisible (hasSample);
 
-        fxButton.setColour (juce::TextButton::buttonColourId, hasFx ? rowColour.withAlpha (0.7f) : Theme::panelEdge);
+        fxButton.setColour (juce::TextButton::buttonColourId, hasFx ? rowColour.darker (0.15f) : Theme::raised);
         fxButton.setColour (juce::TextButton::textColourOffId, hasFx ? Theme::background : Theme::textDim);
 
         if (! volume.isMouseButtonDown() && std::abs (volume.getValue() - volumeDb) > 0.05)
@@ -76,7 +89,7 @@ public:
         const bool lit = state == State::playing || state == State::fadingIn;
         playButton.setButtonText (oneShot ? "PLAY" : state == State::loading ? "..." : lit ? "STOP" : "PLAY");
         playButton.setColour (juce::TextButton::buttonColourId,
-                              state == State::playing ? rowColour : state == State::fadingIn ? Theme::warn : Theme::panelEdge);
+                              state == State::playing ? rowColour : state == State::fadingIn ? Theme::warn : Theme::raised);
         playButton.setColour (juce::TextButton::textColourOffId, lit ? Theme::background : Theme::text);
 
         if (changed)
@@ -107,14 +120,25 @@ public:
         }
 
         const bool lit = state == State::playing;
-        g.setColour (Theme::background.interpolatedWith (rowColour, lit ? 0.18f : 0.06f));
-        g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (lit ? rowColour : state == State::fadingIn || state == State::loading ? Theme::warn
-                                                                                           : rowColour.withAlpha (0.35f));
-        g.drawRoundedRectangle (r, 5.0f, state == State::idle ? 1.0f : 2.0f);
+        const bool pending = state == State::fadingIn || state == State::loading;
+        const auto edge = lit ? rowColour : pending ? Theme::warn : juce::Colour();
+
+        Theme::drawSurface (g, r, Theme::raised.interpolatedWith (rowColour, lit ? 0.16f : 0.035f), 6.0f);
+
+        if (! edge.isTransparent())
+        {
+            // Playing: a glow from the top and a coloured outline.
+            g.setGradientFill (juce::ColourGradient (edge.withAlpha (0.28f), 0.0f, r.getY(),
+                                                     edge.withAlpha (0.0f), 0.0f, r.getY() + 60.0f, false));
+            g.fillRoundedRectangle (r, 6.0f);
+            g.setColour (edge);
+            g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.5f);
+            g.fillRoundedRectangle (r.reduced (10.0f, 0.0f).withHeight (3.0f), 1.5f);
+        }
 
         // Small tags: plays once, reversed, smooth loop point.
         juce::StringArray tags;
+        if (midiAssigned)          tags.add ("MIDI");
         if (oneShot)               tags.add ("1x");
         if (reversed)              tags.add ("REV");
         if (smoothed && ! oneShot) tags.add ("~");
@@ -123,20 +147,18 @@ public:
         if (! tags.isEmpty())
         {
             g.setColour (rowColour);
-            g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.setFont (Theme::heading (10.0f));
             const auto text = tags.joinIntoString (" ");
             g.drawText (text, top.removeFromBottom (11), juce::Justification::centredRight);
         }
 
-        g.setColour (Theme::text);
-        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawFittedText (label, top, juce::Justification::centred, 2);
+        Theme::drawFittedName (g, label, top.reduced (2, 0), lit ? Theme::text : Theme::text.withAlpha (0.88f), 24.0f);
     }
 
     void resized() override
     {
         auto area = getLocalBounds().reduced (5);
-        nameArea = area.removeFromTop (30);
+        nameArea = area.removeFromTop (38);
         area.removeFromTop (2);
 
         auto buttons = area.removeFromTop (26);
@@ -183,18 +205,20 @@ public:
 
 private:
     juce::String label;
-    bool oneShot = false, smoothed = false, reversed = false;
+    bool oneShot = false, smoothed = false, reversed = false, midiAssigned = false;
     State state = State::empty;
     juce::Colour rowColour = Theme::accent;
     juce::Rectangle<int> nameArea;
 
-    juce::TextButton playButton { "PLAY" }, xfButton { "XF" }, fxButton { "FX" };
-    juce::Slider volume;
+    RightClickable<juce::TextButton> playButton { "PLAY" }, xfButton { "XF" };
+    juce::TextButton fxButton { "FX" };
+    RightClickable<juce::Slider> volume;
 };
 
 // A group of channels: its name, FX and group fader on the left, then its
-// channels in a grid just big enough for them. Small groups sit side by side;
-// big ones wrap their channels onto more lines. Drag the name to move it.
+// channels in a grid. By default the grid is one line (wrapping if the window is
+// too narrow); dragging the right edge picks a number of columns instead.
+// Drag the name to move the group.
 class RowView : public juce::Component
 {
 public:
@@ -205,8 +229,11 @@ public:
     ChannelStrip strip { {}, false };
 
     std::function<void (int)> onPlay, onCrossfade, onMenu, onChannelFx;
+    std::function<void (int, const juce::String&)> onChannelLearn;
     std::function<void (int, double)> onVolume;
     std::function<void()> onAddChannel, onHeaderMenu, onFx, onLayoutChanged;
+    ColumnResizer resizer;   // its onColumnsChanged is set by the owner
+    juce::Point<int> grabOffset;   // where in the group the mouse picked it up
 
     RowView()
     {
@@ -221,25 +248,35 @@ public:
         addButton.setTooltip ("Add a channel");
         addButton.setWantsKeyboardFocus (false);
         addButton.onClick = [this] { if (onAddChannel) onAddChannel(); };
+
+        resizer.columnsForWidth = [this] (int width)
+        {
+            const int fitting = (width - headerWidth - 2 * padding + cardGap + (cardWidth + cardGap) / 2) / (cardWidth + cardGap);
+            return juce::jlimit (1, juce::jmax (1, cards.size()), fitting);
+        };
     }
 
     // The size a group with this many channels wants, given the widest it may be.
-    static juce::Point<int> preferredSize (int numChannels, int maxWidth)
+    // columns 0 means automatic: everything on one line if it fits.
+    static juce::Point<int> preferredSize (int numChannels, int maxWidth, int wantedColumns = 0)
     {
-        const int items = numChannels + 1;   // the channels, then the + button
+        const int items = juce::jmax (1, numChannels);
         const int cell = cardWidth + cardGap;
-        const int columns = juce::jlimit (1, items, (maxWidth - headerWidth - 2 * padding + cardGap) / cell);
+        const int fitting = juce::jmax (1, (maxWidth - headerWidth - 2 * padding + cardGap) / cell);
+        const int columns = juce::jlimit (1, items, juce::jmin (fitting, wantedColumns > 0 ? wantedColumns : items));
         const int lines = (items + columns - 1) / columns;
         return { headerWidth + 2 * padding + columns * cell - cardGap,
                  juce::jmax (cardHeight, lines * (cardHeight + cardGap) - cardGap) + 2 * padding };
     }
 
     juce::Component* getCard (int slot)   { return juce::isPositiveAndBelow (slot, cards.size()) ? cards[slot] : nullptr; }
+    ChannelCard* getChannelCard (int slot) { return juce::isPositiveAndBelow (slot, cards.size()) ? cards[slot] : nullptr; }
 
     void update (const LiveSet::Row& row, const std::function<bool (int slotId)>& isFadingIn, juce::uint32 now)
     {
         const auto newColour = Theme::rowColour (row.colour);
-        fxButton.setColour (juce::TextButton::buttonColourId, row.fx.anyOn() ? newColour.withAlpha (0.6f) : Theme::panelEdge);
+        fixedColumns = row.columns > 0;
+        fxButton.setColour (juce::TextButton::buttonColourId, row.fx.anyOn() ? newColour.darker (0.15f) : Theme::raised);
 
         if (row.name != name || newColour != colour)
         {
@@ -261,6 +298,7 @@ public:
                 c->onMenu = [this, i] { if (onMenu) onMenu (i); };
                 c->onFx = [this, i] { if (onChannelFx) onChannelFx (i); };
                 c->onVolume = [this, i] (double db) { if (onVolume) onVolume (i, db); };
+                c->onLearn = [this, i] (const juce::String& control) { if (onChannelLearn) onChannelLearn (i, control); };
                 addAndMakeVisible (c);
             }
 
@@ -320,6 +358,7 @@ public:
     void paintOverChildren (juce::Graphics& g) override
     {
         g.setColour (colour);
+        ColumnResizer::paintGrip (g, *this, colour, fixedColumns);
 
         if (dropMarker >= 0)
         {
@@ -346,14 +385,13 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat();
-        g.setColour (Theme::panel.interpolatedWith (colour, 0.05f));
-        g.fillRoundedRectangle (bounds, 6.0f);
+        Theme::drawSurface (g, bounds, Theme::panel, 8.0f);
 
-        // Coloured edge on the left identifies the group at a glance.
+        // Coloured spine on the left identifies the group at a glance.
+        Theme::drawSpine (g, bounds, colour);
+
         g.setColour (colour);
-        g.fillRoundedRectangle (bounds.withWidth (6.0f), 3.0f);
-
-        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+        g.setFont (Theme::heading (14.0f, 0.1f));
         g.drawFittedText (name.toUpperCase(), nameArea.reduced (8, 0), juce::Justification::centredLeft, 2);
     }
 
@@ -362,7 +400,10 @@ public:
         auto area = getLocalBounds();
         auto header = area.removeFromLeft (headerWidth).withTrimmedLeft (6);
         nameArea = header.removeFromTop (34);
-        fxButton.setBounds (header.removeFromTop (24).reduced (8, 0));
+        auto buttons = header.removeFromTop (24).reduced (8, 0);
+        addButton.setBounds (buttons.removeFromRight (28));
+        buttons.removeFromRight (4);
+        fxButton.setBounds (buttons);
         strip.setBounds (header);
 
         gridArea = area.reduced (padding);
@@ -370,23 +411,38 @@ public:
 
         for (int i = 0; i < cards.size(); ++i)
             cards[i]->setBounds (cellBounds (i));
+    }
 
-        addButton.setBounds (cellBounds (cards.size()).withWidth (36));
+    void mouseMove (const juce::MouseEvent& e) override       { resizer.mouseMove (*this, e); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { resizer.mouseDoubleClick (*this, e); }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        resizer.mouseDown (*this, e);
     }
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (resizer.mouseDrag (e))
+            return;
+
         // Dragging the group's name picks the whole group up.
         if (! nameArea.contains (e.getMouseDownPosition()) || e.getDistanceFromDragStart() < 6)
             return;
 
         if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
             if (! container->isDragAndDropActive())
+            {
+                grabOffset = e.getMouseDownPosition();
                 container->startDragging (dragPrefix + juce::String (index), this);
+            }
     }
 
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (resizer.mouseUp())
+            return;
+
         if (e.mouseWasClicked() && nameArea.contains (e.getPosition()) && onHeaderMenu)
             onHeaderMenu();
     }
@@ -403,6 +459,7 @@ private:
     juce::Colour colour = Theme::accent;
     juce::Rectangle<int> nameArea, gridArea;
     int columns = 1, dropMarker = -1, groupDropSide = 0;
+    bool fixedColumns = false;
     juce::OwnedArray<ChannelCard> cards;
     juce::TextButton addButton { "+" };
     juce::TextButton fxButton { "FX" };

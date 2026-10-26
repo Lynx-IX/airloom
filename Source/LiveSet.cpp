@@ -135,6 +135,9 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     xml->setAttribute ("fade", fadeSeconds);
     xml->setAttribute ("bpm", bpm);
     xml->setAttribute ("loopLength", (int) loopLength);
+    xml->setAttribute ("inputsX", inputsPosition.x);
+    xml->setAttribute ("inputsY", inputsPosition.y);
+    xml->setAttribute ("inputsColumns", inputsColumns);
 
     for (auto& r : rows)
     {
@@ -144,6 +147,10 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
         re->setAttribute ("newSlotsOneShot", r.newSlotsOneShot);
         re->setAttribute ("fader", r.faderDb);
         re->setAttribute ("mute", r.muted);
+        re->setAttribute ("columns", r.columns);
+        re->setAttribute ("uid", r.uid);
+        re->setAttribute ("x", r.position.x);
+        re->setAttribute ("y", r.position.y);
         r.fx.addToXml (*re);
 
         for (auto& s : r.slots)
@@ -155,10 +162,14 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
             se->setAttribute ("volume", s.volumeDb);
             se->setAttribute ("smooth", s.smoothSeconds);
             se->setAttribute ("reverse", s.reverse);
+            se->setAttribute ("uid", s.uid);
             if (s.fx.isActive())
                 s.fx.addToXml (*se);
         }
     }
+
+    if (midi != nullptr)
+        xml->addChildElement (new juce::XmlElement (*midi));
 
     for (auto& in : inputs)
     {
@@ -213,6 +224,11 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     fadeSeconds = xml.getDoubleAttribute ("fade", 8.0);
     bpm = juce::jlimit (30.0, 240.0, xml.getDoubleAttribute ("bpm", 72.0));
     loopLength = (LoopLength) juce::jlimit (0, 2, xml.getIntAttribute ("loopLength", 0));
+    inputsPosition = { xml.getIntAttribute ("inputsX", -1), xml.getIntAttribute ("inputsY", -1) };
+    midi.reset();
+    if (auto* m = xml.getChildByName ("MidiMap"))
+        midi = std::make_shared<juce::XmlElement> (*m);
+    inputsColumns = juce::jmax (0, xml.getIntAttribute ("inputsColumns", 0));
 
     for (auto* re : xml.getChildWithTagNameIterator ("Row"))
     {
@@ -225,6 +241,9 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
         r.newSlotsOneShot = re->getBoolAttribute ("newSlotsOneShot");
         r.faderDb = re->getDoubleAttribute ("fader", 0.0);
         r.muted = re->getBoolAttribute ("mute");
+        r.columns = juce::jmax (0, re->getIntAttribute ("columns", 0));
+        r.uid = re->getStringAttribute ("uid", r.uid);
+        r.position = { re->getIntAttribute ("x", -1), re->getIntAttribute ("y", -1) };
         r.fx = FxSettings::fromXml (re->getChildByName ("Fx"));
 
         for (auto* se : re->getChildWithTagNameIterator ("Channel"))
@@ -236,6 +255,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
             s.volumeDb = se->getDoubleAttribute ("volume", 0.0);
             s.smoothSeconds = se->getDoubleAttribute ("smooth", 0.0);
             s.reverse = se->getBoolAttribute ("reverse");
+            s.uid = se->getStringAttribute ("uid", s.uid);
             s.fx = FxSettings::fromXml (se->getChildByName ("Fx"));
             r.slots.push_back (std::move (s));
         }

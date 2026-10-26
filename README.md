@@ -50,13 +50,14 @@ it's installed; writes a pass/fail report; can run while the app is open):
 
 - **Samples panel (left):** drop audio files or whole folders on it, or use Add files / Add folder. Everything you
   load for the set lives here. Each sample shows which rows use it.
-- **Groups** (the rows) are only as wide as their channels, so small groups sit side by side and the next one wraps
-  onto a new line when there's no room; a group with lots of channels lays them out as a grid. **Drag a group by its
-  name** to move it (a bar shows where it lands) - MidiMix faders follow the new order. The **<** button folds the
+- **Groups** (the Inputs among them) can go anywhere: **drag a group by its name** and drop it - an outline
+  shows where it lands, and groups settle up under whatever is above them, so gaps beside a tall group fill in. Drag
+  a group's **right edge** to set how many columns its grid has (6 channels as 6x1, 3x2, 2x3...); double-click the
+  edge to go back to automatic. The **<** button folds the
   samples list into a thin strip to give the groups more room (click the strip to open it again).
 - Each group is a layer, with its own volume fader, meter and mute on the left. A new set starts with Pads,
-  Ambient, Tones and One-shots. Click a row's name to rename it, move it up/down, remove it, or add a channel.
-  **+ ROW** adds one (up to 8, one per MidiMix fader).
+  Ambient, Tones and One-shots. Click a group's name to rename it, recolour it, remove it, or add a channel.
+  **+ ROW** adds one (up to 8).
 - **Channels** each hold one sample with its own volume. Drag samples from the panel (or straight from Explorer) onto
   a channel, or onto a row to fill its empty channels. **+** at the end of a row adds a channel. Click a channel's
   name (or right-click it) to load, rename, switch between Loop and Play once, move, clear or remove it.
@@ -149,12 +150,14 @@ Hosted instruments sit in the INPUTS section next to Mic and Instrument (up to 4
 
 ## Recording loops
 
-The looper controls sit at the left of the INPUTS section.
+The looper controls (REC, DUB, UNDO, loop length and status) sit in the middle of the bottom bar.
 
 1. **ARM** the input(s) you want to record (the MidiMix's first two REC ARM buttons do the same and light up).
 2. Press **REC** and play. The status shows the time.
-3. Press **STOP** (the same button). The loop starts playing immediately, in time, as a new channel in a
-   **Live Loops** row (created automatically), with its own fader, XF, effects and so on.
+3. Press **STOP** (the same button). The loop starts playing immediately, in time, as a new channel with its own
+   fader, XF, effects and so on. Loops are grouped and named by the key the Fire is set to: the first loop in Bb
+   major is **Loop Bb major 1** in a **Loops Bb major** group (created automatically, at the bottom); with no
+   instrument key they go into **Live Loops**. If all 8 groups are taken, new keys share an existing loops group.
 4. **DUB** records on top of the latest loop (or any loop: its menu > *Overdub on this loop*); press again to stop.
    The new layer lines up with what you heard - the interface's latency is compensated. **UNDO** removes the last
    overdub.
@@ -162,7 +165,7 @@ The looper controls sit at the left of the INPUTS section.
 - **With or without effects:** loops are recorded with the input's effects by default (exactly what you hear).
   Click an input's name > *Record loops dry* to record it clean, so the loop's effects can be changed afterwards.
   The input shows "records dry" when set.
-- **Length** (the menu under DUB/UNDO): **Free length** (exactly as long as you played), **Snap to bars** (rounds to
+- **Length** (the menu next to UNDO): **Free length** (exactly as long as you played), **Snap to bars** (rounds to
   whole bars at the BPM - stop a little late and it trims, stop early and it records on to the bar line), or
   **Match first loop** (every new loop is a whole multiple of the first, so they never drift apart).
 - The loop seam is blended using a moment of audio recorded just past the end, so loops repeat without a click
@@ -170,6 +173,11 @@ The looper controls sit at the left of the INPUTS section.
 - Every take is saved as a WAV straight away (in `%APPDATA%\LiveRig\Recordings`), so it survives a restart; saving
   the set gathers takes into the set folder like any other sample. Overdubs are written after each pass.
 - REC, DUB, UNDO and the ARM buttons are all MIDI-learnable (right-click), e.g. for a foot switch.
+
+## Set timer
+
+The **SET** clock in the header shows how long the set has been going: **START** begins it, **STOP** pauses it
+(START carries on), right-click resets it. Teal while running, amber while paused.
 
 ## Sets
 
@@ -187,20 +195,24 @@ saved automatically, so the app reopens exactly where you left off.
   licence - so the pack includes **Plug-ins needed.txt** listing what to install; their settings are in the set and
   come back once they're installed.
 
-## MidiMix
+## MIDI (MidiMix or any controller)
 
-| MidiMix | Live Rig |
-|---|---|
-| Faders 1-8 | Row volumes 1-8, top to bottom |
-| Master fader | Master |
-| Mute buttons 1-8 | Row mutes (lit = row on) |
-| REC ARM buttons 1-2 | Arm inputs 1-2 for loop recording (lit = armed) |
+Nothing on a set is assigned automatically: **right-click a control and choose Learn MIDI control**, then move or
+press the hardware control. Learnable controls:
 
-Faders use **soft takeover**: a hardware fader only grabs the row once it passes the on-screen position, so
-nothing jumps. Until then an amber tick shows where the hardware fader is.
+- each channel's **PLAY/STOP**, **XF** and **volume** (a MIDI tag appears on the channel once it has any)
+- each group's **fader** and **mute**
+- master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, TAP
 
-**Right-click** any fader, mute or STOP ALL to learn a different MIDI control, clear it, or reset to the MidiMix
-defaults. Any MIDI controller works this way.
+Channel and group assignments are **saved with the set** (and travel in an exported pack), and follow the channel or
+group wherever it's moved. The rest belong to the computer. Out of the box only the MidiMix **master fader** and its
+first two **REC ARM** buttons (arm inputs 1-2) are assigned. MidiMix buttons light up: a group's mute while the group
+is on, a channel's play button while it plays, REC ARM while armed.
+
+Faders and knobs use **soft takeover**: a hardware control only grabs the on-screen one once it passes its position,
+so nothing jumps. On group and master faders an amber tick shows where the hardware is until then.
+
+Right-click any learnable control to clear its assignment, or to clear all MIDI assignments.
 
 ## Low latency (ASIO)
 

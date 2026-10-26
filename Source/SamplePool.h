@@ -129,8 +129,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (Theme::panel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+        Theme::drawSurface (g, getLocalBounds().toFloat(), Theme::panel, 8.0f);
 
         if (collapsed)
         {
@@ -139,14 +138,14 @@ public:
             g.addTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi)
                                 .translated (0.0f, (float) getHeight()));
             g.setColour (Theme::textDim);
-            g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+            g.setFont (Theme::heading (13.0f, 0.14f));
             g.drawText ("SAMPLES  (" + juce::String (files.size()) + ")", juce::Rectangle<int> (0, 0, getHeight() - 50, getWidth()),
                         juce::Justification::centred);
             return;
         }
 
         g.setColour (Theme::text);
-        g.setFont (juce::FontOptions (17.0f, juce::Font::bold));
+        g.setFont (Theme::heading (14.0f, 0.12f));
         g.drawText ("SAMPLES", titleArea, juce::Justification::centredLeft);
 
         g.setColour (Theme::textDim);
@@ -196,8 +195,8 @@ private:
 
         if (selected)
         {
-            g.setColour (Theme::panelEdge);
-            g.fillRect (0, 0, width, height);
+            g.setColour (Theme::accent.withAlpha (0.14f));
+            g.fillRoundedRectangle (juce::Rectangle<float> ((float) width, (float) height).reduced (2.0f, 1.0f), 4.0f);
         }
 
         const auto usage = describeUsage ? describeUsage (files[row]) : juce::String();
@@ -210,8 +209,8 @@ private:
             g.drawText (usage, area.removeFromRight (juce::jmin (100, width / 3)), juce::Justification::centredRight, true);
         }
 
-        g.setColour (Theme::text);
-        g.setFont (juce::FontOptions (15.0f));
+        g.setColour (usage.isNotEmpty() ? Theme::text : Theme::text.withAlpha (0.75f));
+        g.setFont (juce::FontOptions (14.5f));
         g.drawText (files[row].getFileNameWithoutExtension(), area, juce::Justification::centredLeft, true);
     }
 

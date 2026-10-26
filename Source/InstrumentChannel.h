@@ -48,6 +48,47 @@ struct PadLayout
         return degreeForPad (pad) % (int) scaleSteps[(size_t) juce::jlimit (0, numScales - 1, scale)].size() == 0;
     }
 
+    // The key that shares these notes with a different home: the relative major of a
+    // minor scale (A minor -> C major), the relative minor of a major one (Bb major -> G minor).
+    // -1 for scales without one (Hijaz, chromatic).
+    int relativeRoot() const
+    {
+        switch (scale)
+        {
+            case 0: case 2: return (root + 3) % 12;    // minor -> relative major
+            case 1: case 3: return (root + 9) % 12;    // major -> relative minor
+            case 4:         return (root + 10) % 12;   // Dorian -> the major scale it comes from
+            default:        return -1;
+        }
+    }
+
+    bool isRelativeRootPad (int pad) const
+    {
+        const int relative = relativeRoot();
+        return relative >= 0 && ! isRootPad (pad) && noteForPad (pad) % 12 == relative;
+    }
+
+    juce::String describeRelative() const
+    {
+        const int relative = relativeRoot();
+        if (relative < 0)
+            return {};
+        return juce::String (noteNames[relative]) + (scale == 1 || scale == 3 ? " minor" : " major");
+    }
+
+    // The key as people say it: "A minor", "Bb major", "E Hijaz". Empty for chromatic.
+    juce::String keyName() const
+    {
+        const juce::String note = noteNames[root % 12];
+        switch (scale)
+        {
+            case 0: case 2: case 4: return note + " minor";
+            case 1: case 3:         return note + " major";
+            case 5:                 return note + " Hijaz";
+            default:                return {};
+        }
+    }
+
     juce::String describe() const
     {
         return juce::String (noteNames[root % 12]) + " " + scaleNames[juce::jlimit (0, numScales - 1, scale)];

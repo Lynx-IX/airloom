@@ -12,6 +12,13 @@ inline int newSlotId()
     return next++;
 }
 
+// Saved with the set, so MIDI assignments still find their channel or group
+// after it is moved, renamed or the set is reopened on another computer.
+inline juce::String newUid()
+{
+    return juce::Uuid().toString().substring (0, 12);
+}
+
 // A performance set: rows of channels (one sample each), plus the pool of every
 // sample loaded. Files can live anywhere; saving a set gathers them into its folder.
 struct LiveSet
@@ -26,6 +33,7 @@ struct LiveSet
         double smoothSeconds = 0.0;    // > 0: blend the end into the start so a non-loop repeats seamlessly
         bool reverse = false;          // play the sample backwards
         FxSettings fx;                 // this channel's own effects, before the row's
+        juce::String uid = newUid();   // what MIDI assignments refer to
 
         // Runtime state, not saved.
         int id = newSlotId();
@@ -45,6 +53,9 @@ struct LiveSet
         bool newSlotsOneShot = false;  // what channels added to this row default to
         double faderDb = 0.0;
         bool muted = false;
+        int columns = 0;               // grid width in channels; 0 = automatic (one line)
+        juce::Point<int> position { -1, -1 };   // where the group was placed; -1 = not placed yet
+        juce::String uid = newUid();   // what MIDI assignments refer to
         FxSettings fx;
         std::vector<Slot> slots;
 
@@ -102,6 +113,9 @@ struct LiveSet
     double fadeSeconds = 8.0;
     double bpm = 72.0;                 // for synced delays and snapping recorded loops to bars
     LoopLength loopLength = LoopLength::free;
+    juce::Point<int> inputsPosition { -1, -1 };   // where the Inputs + Looper group was placed
+    std::shared_ptr<juce::XmlElement> midi;       // MIDI assigned to this set's channels and groups
+    int inputsColumns = 0;             // its grid width in strips; 0 = automatic
 
     static constexpr int maxRows = 8;  // one per MidiMix fader
     static constexpr const char* fileExtension = ".liverig";

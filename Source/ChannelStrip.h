@@ -73,11 +73,11 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (Theme::panel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+        if (title.isNotEmpty())
+            Theme::drawSurface (g, getLocalBounds().toFloat(), Theme::panel, 8.0f);
 
         g.setColour (Theme::text);
-        g.setFont (juce::FontOptions (17.0f, juce::Font::bold));
+        g.setFont (Theme::heading (15.0f, 0.12f));
         g.drawText (title.toUpperCase(), titleArea, juce::Justification::centred);
 
         if (cuedText.isNotEmpty())

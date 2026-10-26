@@ -21,37 +21,59 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto area = getLocalBounds().toFloat();
-        const float gap = juce::jmin (3.0f, area.getWidth() * 0.15f);
+        const float gap = juce::jmin (2.0f, area.getWidth() * 0.12f);
         const float barWidth = (area.getWidth() - gap) / 2.0f;
+
+        // Tall meters are drawn as LED segments; short ones as a smooth bar.
+        const float segment = 3.0f, segmentGap = 1.0f;
+        const bool segmented = area.getHeight() >= 60.0f;
 
         for (int ch = 0; ch < 2; ++ch)
         {
             auto bar = juce::Rectangle<float> (area.getX() + ch * (barWidth + gap), area.getY(),
                                                barWidth, area.getHeight());
 
-            // A dark trough with an outline, so the meter is visible even in silence.
-            g.setColour (juce::Colours::black.withAlpha (0.45f));
-            g.fillRoundedRectangle (bar, 2.0f);
-            g.setColour (Theme::panelEdge);
-            g.drawRoundedRectangle (bar, 2.0f, 1.0f);
+            g.setColour (juce::Colour (0xff050608));
+            g.fillRoundedRectangle (bar, 1.5f);
 
+            const auto inner = bar.reduced (1.0f);
             const float level = toProportion (display[(size_t) ch]);
-            auto fill = bar.reduced (1.0f).withTop (bar.getBottom() - 1.0f - (bar.getHeight() - 2.0f) * level);
-            g.setColour (display[(size_t) ch] >= 0.99f ? Theme::danger
-                       : display[(size_t) ch] >= 0.5f  ? Theme::warn
-                                                       : Theme::accent);
-            g.fillRoundedRectangle (fill, 2.0f);
+            const float litTop = inner.getBottom() - inner.getHeight() * level;
+
+            if (segmented)
+            {
+                for (float y = inner.getBottom() - segment; y >= inner.getY(); y -= segment + segmentGap)
+                {
+                    const float proportion = (inner.getBottom() - y) / inner.getHeight();
+                    const bool lit = y + segment * 0.5f >= litTop && level > 0.0f;
+                    g.setColour (colourAt (proportion).withAlpha (lit ? 1.0f : 0.07f));
+                    g.fillRect (inner.getX(), y, inner.getWidth(), segment);
+                }
+            }
+            else if (level > 0.0f)
+            {
+                g.setGradientFill (juce::ColourGradient (colourAt (0.0f), 0.0f, inner.getBottom(),
+                                                         colourAt (1.0f), 0.0f, inner.getY(), false));
+                g.fillRect (inner.withTop (litTop));
+            }
 
             if (hold[(size_t) ch] > 0.001f)
             {
-                const float holdY = bar.getBottom() - bar.getHeight() * toProportion (hold[(size_t) ch]);
-                g.setColour (Theme::text);
-                g.fillRect (bar.getX() + 1.0f, holdY - 1.0f, bar.getWidth() - 2.0f, 2.0f);
+                const float p = toProportion (hold[(size_t) ch]);
+                const float holdY = inner.getBottom() - inner.getHeight() * p;
+                g.setColour (colourAt (p).brighter (0.3f));
+                g.fillRect (inner.getX(), holdY - 1.0f, inner.getWidth(), 2.0f);
             }
         }
     }
 
 private:
+    // Green-teal up to -12 dB, amber to -3 dB, red above (positions on the -60..0 dB scale).
+    static juce::Colour colourAt (float proportion)
+    {
+        return proportion >= 0.95f ? Theme::danger : proportion >= 0.8f ? Theme::warn : Theme::accent;
+    }
+
     // Map linear gain to 0..1 on a -60..0 dB scale.
     static float toProportion (float gain)
     {

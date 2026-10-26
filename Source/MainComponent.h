@@ -4,7 +4,9 @@
 #include "ChannelStrip.h"
 #include "FxPanel.h"
 #include "InputChannel.h"
+#include "BeatIndicator.h"
 #include "InputsView.h"
+#include "LooperBar.h"
 #include "InstrumentChannel.h"
 #include "LiveSet.h"
 #include "LoopChannel.h"
@@ -76,6 +78,9 @@ private:
     void moveChannel (int row, int slot, int delta);
     void moveChannelTo (int slotId, int targetRow, int targetIndex);
     RowView* rowViewAt (juce::Point<int> pos);
+    juce::Component* groupViewAt (juce::Point<int> pos);
+    std::map<int, juce::Rectangle<int>> arrangeGroups (int moving = -2, juce::Point<int> movingTo = {}) const;
+    juce::Point<int> droppedGroupPosition (const SourceDetails& details, int& item) const;
     void clearDropMarkers();
     void assignToChannels (int row, int firstSlot, const juce::Array<juce::File>& files);
     void appendToRow (int row, const juce::Array<juce::File>& files);
@@ -107,6 +112,12 @@ private:
     void applyInstrument (int index);
     void captureInstrumentStates();
     void updateFireLights (bool allOff = false);
+    void applySetMidi();
+    bool findSlotByUid (const juce::String& uid, int& row, int& slot) const;
+    void applyFaderMidi (const juce::String& target, juce::Slider& fader, float proportion,
+                         const std::function<void (float)>& showHardwarePosition = {});
+    bool currentKey (PadLayout& key) const;
+    juce::String nextLoopLabel (const Row& row) const;
     juce::Array<juce::PluginDescription> instrumentTypes() const;
     juce::String instrumentName (int index) const;
     juce::String instrumentDetail (int index) const;
@@ -208,8 +219,30 @@ private:
     // UI
     SamplePool pool { formatManager };
     juce::Viewport rowsViewport;
-    juce::Component rowsContent;
+    // The area the groups sit on; while a group is dragged it shows where it would land.
+    struct GroupCanvas : public juce::Component
+    {
+        juce::Rectangle<int> ghost;
+        juce::Colour ghostColour;
+
+        void showGhost (juce::Rectangle<int> r, juce::Colour c)
+        {
+            if (r != ghost) { repaint (ghost.expanded (4)); ghost = r; ghostColour = c; repaint (ghost.expanded (4)); }
+        }
+
+        void paintOverChildren (juce::Graphics& g) override
+        {
+            if (ghost.isEmpty())
+                return;
+            g.setColour (ghostColour.withAlpha (0.12f));
+            g.fillRoundedRectangle (ghost.toFloat(), 8.0f);
+            g.setColour (ghostColour);
+            g.drawRoundedRectangle (ghost.toFloat().reduced (1.0f), 8.0f, 2.0f);
+        }
+    };
+    GroupCanvas rowsContent;
     InputsView inputsView;
+    LooperBar looperBar;
     juce::OwnedArray<RowView> rowViews;
     juce::TextButton addRowButton { "+ ROW" };
     ChannelStrip masterStrip { "Master", false };
@@ -220,6 +253,16 @@ private:
     juce::Slider bpmSlider;
     juce::Label bpmLabel { {}, "BPM" };
     RightClickable<juce::TextButton> tapButton { "TAP" };
+
+    // Set timer: how long the performance has been going.
+    RightClickable<juce::TextButton> setTimerButton { "START" };
+    double setTimerStartMs = 0.0, setTimerElapsedMs = 0.0;
+    bool setTimerRunning = false;
+    juce::Rectangle<int> setTimerArea;
+    juce::String setTimerText { "0:00" };
+    double setTimerSeconds() const;
+    void toggleSetTimer();
+    void showSetTimerMenu();
     std::vector<double> tapTimes;   // recent TAP presses, in ms
     BeatIndicator beatIndicator;
     juce::int64 beatAnchor = 0;     // clock time of a beat 1 (set by TAP)
@@ -238,6 +281,7 @@ private:
 
     struct Takeover { bool locked = false; float last = -1.0f; };
     std::map<juce::String, Takeover> takeover;
+    std::map<int, bool> ledState;   // MidiMix button lights as last sent
 
     struct PendingMidi { juce::String device; juce::MidiMessage message; };
     std::array<PendingMidi, 512> midiQueue;

@@ -32,16 +32,7 @@ void MidiMap::setDefaults()
 {
     bindings.clear();
 
-    // Akai MidiMix factory settings.
-    const int faderCCs[] = { 19, 23, 27, 31, 49, 53, 57, 61 };
-    const int muteNotes[] = { 1, 4, 7, 10, 13, 16, 19, 22 };
-
-    for (int i = 0; i < 8; ++i)
-    {
-        bind ("fader." + juce::String (i), { midiMixName, false, faderCCs[i], 0 });
-        bind ("mute." + juce::String (i), { midiMixName, true, muteNotes[i], 0 });
-    }
-
+    // Akai MidiMix factory settings for the master fader.
     bind ("fader.master", { midiMixName, false, 62, 0 });
 
     // The first two REC ARM buttons arm the two inputs.
@@ -80,11 +71,25 @@ juce::StringArray MidiMap::findTargets (const juce::String& deviceName, const ju
     return targets;
 }
 
+void MidiMap::removeIf (const std::function<bool (const juce::String&)>& shouldRemove)
+{
+    for (auto it = bindings.begin(); it != bindings.end();)
+        it = shouldRemove (it->first) ? bindings.erase (it) : std::next (it);
+}
+
 std::unique_ptr<juce::XmlElement> MidiMap::toXml() const
+{
+    return toXml ([] (const juce::String&) { return true; });
+}
+
+std::unique_ptr<juce::XmlElement> MidiMap::toXml (const std::function<bool (const juce::String&)>& include) const
 {
     auto xml = std::make_unique<juce::XmlElement> ("MidiMap");
     for (auto& [target, b] : bindings)
     {
+        if (! include (target))
+            continue;
+
         auto* e = xml->createNewChildElement ("Bind");
         e->setAttribute ("target", target);
         e->setAttribute ("device", b.device);
@@ -98,6 +103,11 @@ std::unique_ptr<juce::XmlElement> MidiMap::toXml() const
 void MidiMap::fromXml (const juce::XmlElement& xml)
 {
     bindings.clear();
+    addFromXml (xml);
+}
+
+void MidiMap::addFromXml (const juce::XmlElement& xml)
+{
     for (auto* e : xml.getChildWithTagNameIterator ("Bind"))
         bindings[e->getStringAttribute ("target")] = { e->getStringAttribute ("device"),
                                                        e->getBoolAttribute ("note"),

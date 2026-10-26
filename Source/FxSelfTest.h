@@ -4,6 +4,7 @@
 #include "InputChannel.h"
 #include "InstrumentChannel.h"
 #include "LiveSet.h"
+#include "MidiMap.h"
 #include "LoopChannel.h"
 #include "Looper.h"
 #include "TempoGuess.h"
@@ -396,6 +397,30 @@ namespace FxSelfTest
             check (tail > 0.001f, "Channel reverb tail rings out after the channel stops (" + juce::String (juce::Decibels::gainToDecibels (tail), 1) + " dB)");
         }
 
+        // ---- MIDI assignments travel with the set ----
+        {
+            auto set = LiveSet::makeDefault();
+            const auto channelUid = set.rows[0].slots.empty() ? juce::String() : set.rows[0].slots[0].uid;
+            const auto groupUid = set.rows[1].uid;
+
+            MidiMap map;
+            map.bind ("ch." + channelUid + ".play", { "MIDI Mix", true, 1, 0 });
+            map.bind ("grp." + groupUid + ".fader", { "MIDI Mix", false, 19, 0 });
+            map.bind ("stopAll", { "MIDI Mix", true, 27, 0 });
+            set.midi = std::shared_ptr<juce::XmlElement> (map.toXml ([] (const juce::String& t) { return MidiMap::isSetTarget (t); }).release());
+
+            LiveSet reopened;
+            reopened.loadFromXml (*set.toXml ({}), {});
+            MidiMap fresh;
+            if (reopened.midi != nullptr)
+                fresh.addFromXml (*reopened.midi);
+
+            const bool idsKept = ! channelUid.isEmpty() && reopened.rows[0].slots[0].uid == channelUid && reopened.rows[1].uid == groupUid;
+            check (idsKept && fresh.get ("ch." + channelUid + ".play").number == 1 && fresh.get ("grp." + groupUid + ".fader").number == 19
+                       && ! fresh.get ("stopAll").isValid() && ! fresh.get ("fader.0").isValid(),
+                   "Channel and group MIDI is saved with the set; global controls and old fader slots are not");
+        }
+
         // ---- Fire pad layout ----
         {
             PadLayout layout;   // A minor pentatonic, octave 3
@@ -410,6 +435,21 @@ namespace FxSelfTest
             check (layout.noteForPad (32) == layout.noteForPad (bottomLeft + 3), "Next row up starts three scale steps higher");
             check (layout.isRootPad (bottomLeft) && layout.isRootPad (bottomLeft + 5) && ! layout.isRootPad (bottomLeft + 1),
                    "Root pads are found for lighting");
+
+            check (layout.isRelativeRootPad (bottomLeft + 1) && ! layout.isRelativeRootPad (bottomLeft)
+                       && ! layout.isRelativeRootPad (bottomLeft + 2) && layout.describeRelative() == "C major",
+                   "A minor lights its relative C major root (" + layout.describeRelative() + ")");
+
+            PadLayout bb;
+            bb.root = 10;
+            bb.scale = 1;
+            PadLayout e;
+            e.root = 4;
+            e.scale = 1;
+            check (bb.describeRelative() == "G minor" && e.describeRelative() == "C# minor",
+                   "Bb major pairs with G minor, E major with C# minor (" + bb.describeRelative() + ", " + e.describeRelative() + ")");
+            check (layout.keyName() == "A minor" && bb.keyName() == "Bb major" && e.keyName() == "E major",
+                   "Recorded loops are named by key (" + layout.keyName() + ", " + bb.keyName() + ", " + e.keyName() + ")");
 
             layout.scale = PadLayout::numScales - 1;   // chromatic
             check (layout.noteForPad (32) - layout.noteForPad (bottomLeft) == 5, "Chromatic rows are a fourth apart");
