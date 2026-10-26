@@ -5,7 +5,7 @@ project(LiveRig VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Build the C++ runtime into the program, so Live Rig.exe runs on any Windows PC
+# Build the C++ runtime into the program, so Airloom.exe runs on any Windows PC
 # without installing Microsoft's Visual C++ Redistributable first.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
@@ -14,9 +14,13 @@ set(JUCE_DIR "C:/JUCE" CACHE PATH "Path to the JUCE framework")
 add_subdirectory(${JUCE_DIR} ${CMAKE_BINARY_DIR}/JUCE)
 
 juce_add_gui_app(LiveRig
-    PRODUCT_NAME "Live Rig"
-    COMPANY_NAME "Live Rig"
+    PRODUCT_NAME "Airloom"
+    COMPANY_NAME "Airloom"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/AppIcon.png"
     VERSION ${PROJECT_VERSION})
+
+# The icon again, for the logo in the app's header.
+juce_add_binary_data(AirloomData SOURCES Resources/AppIcon.png)
 
 juce_generate_juce_header(LiveRig)
 
@@ -41,6 +45,7 @@ target_compile_definitions(LiveRig PRIVATE
 
 target_link_libraries(LiveRig
     PRIVATE
+        AirloomData
         juce::juce_audio_utils
         juce::juce_audio_formats
         juce::juce_audio_devices

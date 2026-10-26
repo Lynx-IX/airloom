@@ -5,6 +5,7 @@
 #include "InstrumentChannel.h"
 #include "LiveSet.h"
 #include "MidiMap.h"
+#include "SetRecorder.h"
 #include "LoopChannel.h"
 #include "Looper.h"
 #include "TempoGuess.h"
@@ -439,6 +440,99 @@ namespace FxSelfTest
             input.process (in, 2, out, 0, 512, recordBus);
             check (std::abs (recordBus.getSample (0, 10) - 0.5f) < 0.001f,
                    "Recording follows the input fader (a 1.0 sample at -6 dB records as " + juce::String (recordBus.getSample (0, 10), 3) + ")");
+        }
+
+        // ---- Freeze ----
+        {
+            FreezeHold freeze;
+            freeze.prepare (48000.0);
+            freeze.releaseSeconds = 2.0f;
+
+            // Renders 'seconds' with the given input level, returning the pad's RMS over the last half second.
+            bool finite = true;
+            float peak = 0.0f;
+            auto run = [&] (double seconds, float inputLevel)
+            {
+                juce::AudioBuffer<float> buf (2, 480);
+                double sum = 0.0;
+                int counted = 0;
+                const int blocks = (int) (seconds * 100.0);
+                for (int b = 0; b < blocks; ++b)
+                {
+                    for (int i = 0; i < 480; ++i)
+                        for (int ch = 0; ch < 2; ++ch)
+                            buf.setSample (ch, i, inputLevel * std::sin ((float) (b * 480 + i) * 0.0575f));   // ~440 Hz
+                    const auto dry = buf;
+                    freeze.process (buf, 0, 480);
+                    for (int i = 0; i < 480; ++i)
+                    {
+                        const float wet = buf.getSample (0, i) - dry.getSample (0, i);
+                        finite = finite && std::isfinite (wet);
+                        peak = juce::jmax (peak, std::abs (wet));
+                        if (b >= blocks - 50) { sum += wet * wet; ++counted; }
+                    }
+                }
+                return (float) std::sqrt (sum / juce::jmax (1, counted));
+            };
+
+            const float idle = run (1.0, 0.5f);               // playing, not held: silent
+            freeze.held = true;
+            const float start = run (1.0, 0.5f);              // held
+            const float later = run (30.0, 0.0f);             // 30 s later, nothing played
+            const float playOver = run (2.0, 0.5f);           // playing over it doesn't change it
+            freeze.held = false;
+            const float released = run (3.0, 0.0f);          // 2 s release
+
+            check (finite && idle < 1.0e-6f && start > 0.01f && later > start * 0.5f && released < 1.0e-5f && peak < 1.0f
+                       && std::abs (playOver - later) < later * 0.5f,
+                   "Freeze holds the pad 30 s without fading (" + juce::String (juce::Decibels::gainToDecibels (later / start), 1)
+                       + " dB), ignores new playing, releases to silence, peak " + juce::String (peak, 2)
+                       + "  [idle " + juce::String (idle, 6) + " start " + juce::String (start, 3) + " later " + juce::String (later, 3)
+                       + " over " + juce::String (playOver, 3) + " released " + juce::String (released, 6) + "]");
+        }
+
+        // ---- Recording the whole set ----
+        {
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("LiveRig set test.wav");
+            {
+                SetRecorder recorder;
+                const bool started = recorder.start (file, 48000.0);
+                juce::AudioBuffer<float> buf (2, 480);
+                for (int b = 0; b < 200; ++b)   // 2 s
+                {
+                    for (int i = 0; i < 480; ++i)
+                    {
+                        buf.setSample (0, i, 0.5f);
+                        buf.setSample (1, i, -0.25f);
+                    }
+                    recorder.write (buf, 0, 480);
+                }
+                const double seconds = recorder.getSeconds();
+                recorder.stop();
+                check (started && std::abs (seconds - 2.0) < 0.001, "Set recorder counts 2 s written");
+            }
+
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+            bool ok = reader != nullptr && reader->lengthInSamples == 96000 && reader->numChannels == 2 && reader->bitsPerSample == 24;
+            if (ok)
+            {
+                juce::AudioBuffer<float> back (2, 96000);
+                reader->read (&back, 0, 96000, 0, true, true);
+                ok = std::abs (back.getSample (0, 50000) - 0.5f) < 0.001f && std::abs (back.getSample (1, 95999) + 0.25f) < 0.001f;
+            }
+            reader.reset();
+            file.deleteFile();
+            check (ok, "Set recording writes a 24-bit stereo WAV with every sample in place");
+        }
+
+        // ---- The Fire's REC button records ----
+        {
+            MidiMap map;
+            const auto targets = map.findTargets ("FL STUDIO FIRE", juce::MidiMessage::noteOn (1, MidiMap::fireRecNote, 1.0f));
+            const auto pad = map.findTargets ("FL STUDIO FIRE", juce::MidiMessage::noteOn (1, InstrumentChannel::firstFirePadNote, 1.0f));
+            check (targets.contains ("rec") && pad.isEmpty(), "The Fire's REC button starts a loop; its pads stay free for playing");
         }
 
         // ---- MIDI assignments travel with the set ----

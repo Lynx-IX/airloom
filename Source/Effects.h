@@ -118,6 +118,13 @@ public:
     // Processes in place, blending the reverb under the dry signal by 'mix'.
     void process (float* left, float* right, int numSamples, float mix);
 
+    // One (mono) sample in, the stereo tail out.
+    void tick (float input, float& wetL, float& wetR);
+
+    // While frozen the tail holds almost indefinitely: no damping, next to no loss.
+    // The change glides over about 50 ms so it never clicks.
+    void setFrozen (bool shouldFreeze)   { frozen = shouldFreeze; }
+
 private:
     static constexpr int numLines = 8;
 
@@ -147,6 +154,35 @@ private:
     int predelayWrite = 0, predelaySamples = 0;
     float dampCoeff = 0.5f, modDepth = 0.0f;
     float currentDecay = -1.0f, currentSize = -1.0f;
+    bool frozen = false;
+    float freezeAmount = 0.0f, freezeStep = 0.0f;
+};
+
+// FREEZE: holds what was just played as an endless pad to play over. A reverb
+// listens to the live inputs and instruments all the time; pressing hold
+// freezes its tail and stops it listening, releasing fades the pad out.
+//
+// Thread model: held and releaseSeconds are set from anywhere, prepare() and
+// process() run on the audio thread.
+class FreezeHold
+{
+public:
+    std::atomic<bool> held { false };
+    std::atomic<float> releaseSeconds { 4.0f };
+
+    void prepare (double sampleRate);
+
+    // Adds the held pad to the buffer, listening to what's in it first.
+    void process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
+
+    // True while the pad can be heard (held, or fading out).
+    bool isSounding() const   { return sounding; }
+
+private:
+    AmbientReverb reverb;
+    double sampleRate = 44100.0;
+    float level = 0.0f, listen = 1.0f;
+    std::atomic<bool> sounding { false };
 };
 
 // Gain -> gate -> low cut -> EQ -> compressor -> delay -> reverb -> pan,

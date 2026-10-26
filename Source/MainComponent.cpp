@@ -126,6 +126,16 @@ MainComponent::MainComponent()
         return MidiMap::isSetTarget (t) || (t.startsWith ("fader.") && t != "fader.master") || t.startsWith ("mute.");
     });
 
+    // The Fire's REC button became a default later: add it once, unless REC or that button already has a job.
+    if (! props->getBoolValue ("fireRecAdded", false))
+    {
+        if (! midiMap.get ("rec").isValid()
+            && midiMap.findTargets ("FL STUDIO FIRE", juce::MidiMessage::noteOn (1, MidiMap::fireRecNote, 1.0f)).isEmpty())
+            midiMap.bind ("rec", { MidiMap::fireName, true, MidiMap::fireRecNote, 0 });
+        props->setValue ("fireRecAdded", true);
+        props->setValue ("midiMap", midiMap.toXml().get());
+    }
+
     juce::Desktop::getInstance().setGlobalScaleFactor ((float) props->getDoubleValue ("uiScale", 1.0));
 
     for (auto& e : engines)
@@ -185,6 +195,31 @@ MainComponent::MainComponent()
     stopAllButton.onClick = [this] { stopAll (fadeTimeSlider.getValue()); };
     stopAllButton.setColour (juce::TextButton::buttonColourId, Theme::danger.darker (1.2f));
     stopAllButton.onRightClick = [this] { showLearnMenu ("stopAll", "Stop all"); };
+
+    addAndMakeVisible (freezeButton);
+    freezeButton.setWantsKeyboardFocus (false);
+    freezeButton.setTooltip ("Hold what you just played as an endless pad to play over. Press again to let it go "
+                             "(it fades out over the fade time). Right-click to assign a MIDI button.");
+    freezeButton.onClick = [this] { toggleFreeze(); };
+    freezeButton.onRightClick = [this] { showLearnMenu ("freeze", "Freeze"); };
+    updateFreezeButton();
+
+    addAndMakeVisible (recordSetButton);
+    recordSetButton.setWantsKeyboardFocus (false);
+    recordSetButton.setTooltip ("Record everything going to the speakers to a WAV file. Right-click for the recordings folder.");
+    recordSetButton.onClick = [this] { toggleSetRecording(); };
+    recordSetButton.onRightClick = [this]
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Show set recordings");
+        m.addItem (2, "Assign MIDI button...");
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&recordSetButton), [this] (int r)
+        {
+            if (r == 1) { recordingsFolder().getChildFile ("Sets").createDirectory(); recordingsFolder().getChildFile ("Sets").revealToUser(); }
+            if (r == 2) showLearnMenu ("recSet", "Record set");
+        });
+    };
+    updateRecordSetButton();
 
     addAndMakeVisible (setButton);
     addAndMakeVisible (settingsButton);
@@ -271,8 +306,10 @@ MainComponent::~MainComponent()
     knownPlugins.removeChangeListener (this);
 
     loader.removeAllJobs (true, 10000);
+    setRecorder.stop();
     updateMidiLeds (true);
     updateFireLights (true);
+    updateFireButtons (true);
     deviceManager.removeMidiInputDeviceCallback ({}, this);
     deviceManager.removeChangeListener (this);
     shutdownAudio();
@@ -362,6 +399,7 @@ void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRat
     masterGain.reset (sampleRate, 0.05);
     masterGain.setCurrentAndTargetValue (masterTarget);
     outputLimiter.prepare (sampleRate);
+    freezeHold.prepare (sampleRate);
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
@@ -385,6 +423,10 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 
     looper.process (recordBus, juce::jmin (inputSamples, recordBus.getNumSamples()), audioClock, roundTripLatency);
 
+    // So far the buffer holds only the live inputs and instruments: freeze listens to
+    // those (not the loops) and adds its held pad.
+    freezeHold.process (buffer, info.startSample, info.numSamples);
+
     for (auto& e : engines)
         e->process (buffer, info.startSample, info.numSamples);
 
@@ -407,6 +449,7 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 
     // Safety limiter: nothing reaches the speakers above -0.5 dBFS, and nothing hard-clips.
     outputLimiter.process (buffer, info.startSample, info.numSamples, outChannels);
+    setRecorder.write (buffer, info.startSample, info.numSamples);
 
     if (outChannels > 0) masterPeakL = juce::jmax (masterPeakL.load(), buffer.getMagnitude (0, info.startSample, info.numSamples));
     if (outChannels > 1) masterPeakR = juce::jmax (masterPeakR.load(), buffer.getMagnitude (1, info.startSample, info.numSamples));
@@ -535,7 +578,7 @@ void MainComponent::openSet()
                                   auto xml = juce::XmlDocument::parse (file);
                                   if (xml == nullptr || ! xml->hasTagName ("LiveRigSet"))
                                   {
-                                      errorMessage = file.getFileName() + " is not a Live Rig set";
+                                      errorMessage = file.getFileName() + " is not an Airloom set";
                                       repaint();
                                       return;
                                   }
@@ -814,9 +857,9 @@ void MainComponent::writePack (const juce::File& target)
 
 void MainComponent::openPack (const juce::File& pack)
 {
-    // Unpack into Music\Live Rig Sets\<name>, never over an existing folder.
+    // Unpack into Music\Airloom Sets\<name>, never over an existing folder.
     const auto destination = juce::File::getSpecialLocation (juce::File::userMusicDirectory)
-                                 .getChildFile ("Live Rig Sets")
+                                 .getChildFile ("Airloom Sets")
                                  .getChildFile (pack.getFileNameWithoutExtension())
                                  .getNonexistentSibling (true);
     destination.createDirectory();
@@ -848,7 +891,7 @@ void MainComponent::openPack (const juce::File& pack)
 
             if (! ok || xml == nullptr || ! xml->hasTagName ("LiveRigSet"))
             {
-                self->errorMessage = pack.getFileName() + " isn't a Live Rig pack (or couldn't be unpacked)";
+                self->errorMessage = pack.getFileName() + " isn't an Airloom pack (or couldn't be unpacked)";
                 self->repaint();
                 return;
             }
@@ -3254,6 +3297,7 @@ void MainComponent::enableMidiInputs()
     // the Fire's pads light to show the instrument's scale.
     ledOutput.reset();
     fireOutput.reset();
+    fireButtonState.clear();
     for (auto& d : juce::MidiOutput::getAvailableDevices())
     {
         if (ledOutput == nullptr && d.name.removeCharacters (" ").containsIgnoreCase (juce::String (MidiMap::midiMixName).removeCharacters (" ")))
@@ -3384,6 +3428,8 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
         }
         else if (target == "tap")   tapTempo();
         else if (target == "rec")   recPressed();
+        else if (target == "freeze") toggleFreeze();
+        else if (target == "recSet") toggleSetRecording();
         else if (target == "dub")   dubPressed();
         else if (target == "undo")  undoPressed();
         else if (target.startsWith ("arm."))
@@ -3533,6 +3579,89 @@ void MainComponent::saveMidiMap()
     saveSession();
 }
 
+void MainComponent::toggleFreeze()
+{
+    freezeHold.held = ! freezeHold.held.load();
+    updateFreezeButton();
+}
+
+void MainComponent::updateFreezeButton()
+{
+    // Ice blue while held; a dim outline while the pad fades away.
+    const bool held = freezeHold.held.load();
+    const auto ice = juce::Colour (0xff7cc8ff);
+    freezeButton.setColour (juce::TextButton::buttonColourId, held ? ice : freezeHold.isSounding() ? ice.withAlpha (0.25f) : Theme::raised);
+    freezeButton.setColour (juce::TextButton::textColourOffId, held ? Theme::background : Theme::text);
+    freezeButton.setButtonText (held ? "FROZEN" : "FREEZE");
+}
+
+void MainComponent::toggleSetRecording()
+{
+    if (setRecorder.isRecording())
+    {
+        const auto file = setRecorder.getFile();
+        const bool dropped = setRecorder.hasDroppedAudio();
+        const double seconds = setRecorder.getSeconds();
+        setRecorder.stop();
+        infoMessage = "Set saved: " + file.getFileName() + " (" + formatTime (seconds) + ", "
+                    + juce::File::descriptionOfSizeInBytes (file.getSize()) + ") - right-click REC SET to find it";
+        if (dropped)
+            errorMessage = "The disk couldn't keep up, so the set recording has gaps";
+    }
+    else
+    {
+        const auto file = recordingsFolder().getChildFile ("Sets")
+                              .getNonexistentChildFile ("Set " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M"), ".wav");
+        if (currentSampleRate <= 0.0 || ! setRecorder.start (file, currentSampleRate))
+            errorMessage = "Couldn't start recording the set to " + file.getFullPathName();
+        else
+            infoMessage = "Recording the set to " + file.getFileName();
+    }
+
+    updateRecordSetButton();
+    repaint();
+}
+
+void MainComponent::updateRecordSetButton()
+{
+    const bool on = setRecorder.isRecording();
+    const auto text = on ? "REC  " + formatTime (setRecorder.getSeconds()) : juce::String ("REC SET");
+    if (recordSetButton.getButtonText() != text)
+        recordSetButton.setButtonText (text);
+    recordSetButton.setColour (juce::TextButton::buttonColourId, on ? Theme::danger : Theme::danger.darker (0.9f));
+}
+
+void MainComponent::updateFireButtons (bool allOff)
+{
+    if (fireOutput == nullptr)
+        return;
+
+    // The Fire lights its buttons from a CC with the button's number. For REC:
+    // 0 off, 1 dim red, 3 bright red, 4 bright amber.
+    std::map<int, int> wanted;
+    const auto rec = midiMap.get ("rec");
+    if (rec.isValid() && rec.isNote && rec.device.containsIgnoreCase (MidiMap::fireName))
+    {
+        const auto state = looper.getState();
+        wanted[rec.number] = state == Looper::State::overdubbing ? 4 : state != Looper::State::idle ? 3 : 1;
+    }
+
+    // Buttons that no longer have a job go dark.
+    for (auto& [number, value] : fireButtonState)
+        if (wanted.find (number) == wanted.end())
+            wanted[number] = 0;
+
+    for (auto& [number, value] : wanted)
+    {
+        if (allOff)
+            value = 0;
+        auto it = fireButtonState.find (number);
+        if (it == fireButtonState.end() || it->second != value)
+            fireOutput->sendMessageNow (juce::MidiMessage::controllerEvent (1, number, value));
+        fireButtonState[number] = value;
+    }
+}
+
 double MainComponent::setTimerSeconds() const
 {
     const double ms = setTimerRunning ? juce::Time::getMillisecondCounterHiRes() - setTimerStartMs : setTimerElapsedMs;
@@ -3573,6 +3702,10 @@ void MainComponent::showSetTimerMenu()
 void MainComponent::timerCallback()
 {
     updateMidiLeds();   // sends only lights that changed (channels starting, groups muting)
+    updateFireButtons();
+    freezeHold.releaseSeconds = (float) fadeTimeSlider.getValue();
+    updateFreezeButton();
+    updateRecordSetButton();
 
     {
         // The set timer reads h:mm:ss once it passes an hour.
@@ -3666,17 +3799,13 @@ void MainComponent::paint (juce::Graphics& g)
 
     // Header: app name, set name and audio device status.
     auto header = headerArea;
-    auto logo = header.removeFromLeft (26).withSizeKeepingCentre (18, 18).toFloat();
-    g.setColour (Theme::accent.withAlpha (0.25f));
-    g.fillEllipse (logo.expanded (3.0f));
-    g.setColour (Theme::accent);
-    g.drawEllipse (logo, 2.0f);
-    g.fillEllipse (logo.reduced (5.5f));
+    static const auto logoImage = juce::ImageCache::getFromMemory (BinaryData::AppIcon_png, BinaryData::AppIcon_pngSize);
+    g.drawImage (logoImage, header.removeFromLeft (32).withSizeKeepingCentre (32, 32).toFloat(), juce::RectanglePlacement::centred);
 
-    header.removeFromLeft (6);
+    header.removeFromLeft (10);
     g.setColour (Theme::text);
-    g.setFont (Theme::heading (19.0f, 0.18f));
-    g.drawText ("LIVE RIG", header.removeFromLeft (124), juce::Justification::centredLeft);
+    g.setFont (Theme::heading (19.0f, 0.22f));
+    g.drawText ("AIRLOOM", header.removeFromLeft (124), juce::Justification::centredLeft);
 
     g.setColour (Theme::panelEdge);
     g.fillRect (header.removeFromLeft (1).reduced (0, 6));
@@ -3763,12 +3892,16 @@ void MainComponent::resized()
     setTimerButton.setBounds (headerArea.removeFromRight (72).reduced (0, 2));
     headerArea.removeFromRight (8);
     setTimerArea = headerArea.removeFromRight (120);
+    headerArea.removeFromRight (8);
+    recordSetButton.setBounds (headerArea.removeFromRight (96).reduced (0, 2));
     headerArea.removeFromRight (12);
     area.removeFromTop (12);
 
     // Bottom bar: stop all, the looper, fade time, then tempo on the right.
     auto bottom = area.removeFromBottom (60);
     stopAllButton.setBounds (bottom.removeFromLeft (150));
+    bottom.removeFromLeft (10);
+    freezeButton.setBounds (bottom.removeFromLeft (110).withSizeKeepingCentre (110, 40));
     bottom.removeFromLeft (20);
     auto controls = bottom.withSizeKeepingCentre (bottom.getWidth(), 40);
 
@@ -3786,9 +3919,9 @@ void MainComponent::resized()
     fadeTimeSlider.setBounds (fade);
     controls.removeFromRight (20);
 
-    // The looper's buttons sit centred between STOP ALL and the fade time, with its
+    // The looper's buttons sit centred between FREEZE and the fade time, with its
     // status text trailing to the right (moved left if that text would be squeezed).
-    const int centredX = (stopAllButton.getRight() + controls.getRight()) / 2 - LooperBar::buttonsWidth / 2;
+    const int centredX = (freezeButton.getRight() + controls.getRight()) / 2 - LooperBar::buttonsWidth / 2;
     const int looperX = juce::jlimit (controls.getX(), juce::jmax (controls.getX(), controls.getRight() - LooperBar::buttonsWidth - 160), centredX);
     const int looperWidth = juce::jmin (640, controls.getRight() - looperX);
     looperBar.setBounds (controls.withX (looperX).withWidth (looperWidth));

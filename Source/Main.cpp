@@ -23,7 +23,7 @@ public:
         }
 
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
-        mainWindow = std::make_unique<MainWindow> (getApplicationName());
+        mainWindow = std::make_unique<MainWindow> (getApplicationName() + " - Audio Performance Rig");
     }
 
     void shutdown() override

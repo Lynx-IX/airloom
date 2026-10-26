@@ -38,6 +38,9 @@ void MidiMap::setDefaults()
     // The first two REC ARM buttons arm the two inputs.
     bind ("arm.0", { midiMixName, true, 3, 0 });
     bind ("arm.1", { midiMixName, true, 6, 0 });
+
+    // The Fire's REC button records a loop.
+    bind ("rec", { fireName, true, fireRecNote, 0 });
 }
 
 void MidiMap::bind (const juce::String& target, MidiBinding binding)

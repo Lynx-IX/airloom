@@ -17,8 +17,8 @@ struct MidiBinding
 
 // Maps MIDI controls to named targets such as "fader.master", "stopAll" or
 // "ch.<uid>.play". Nothing is assigned to groups or channels automatically:
-// right-click a control to learn one. Only the MidiMix master fader and the
-// first two REC ARM buttons start assigned.
+// right-click a control to learn one. Only the MidiMix master fader, the
+// first two REC ARM buttons and the Fire's REC button start assigned.
 //
 // Targets for a set's channels and groups ("ch." and "grp.") are saved with
 // the set; the rest (master, inputs, looper, tempo) belong to the computer.
@@ -48,6 +48,8 @@ public:
     void fromXml (const juce::XmlElement& xml);
 
     static constexpr const char* midiMixName = "MIDI Mix";
+    static constexpr const char* fireName = "FIRE";
+    static constexpr int fireRecNote = 53;   // the Akai Fire's REC button (its light is CC 53)
 
 private:
     std::map<juce::String, MidiBinding> bindings;

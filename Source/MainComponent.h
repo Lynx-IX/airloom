@@ -14,6 +14,7 @@
 #include "MidiMap.h"
 #include "RowView.h"
 #include "SamplePool.h"
+#include "SetRecorder.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::FileDragAndDropTarget,
@@ -247,6 +248,16 @@ private:
     juce::TextButton addRowButton { "+ ROW" };
     ChannelStrip masterStrip { "Master", false };
     RightClickable<juce::TextButton> stopAllButton { "STOP ALL" };
+    RightClickable<juce::TextButton> freezeButton { "FREEZE" };
+    FreezeHold freezeHold;
+    void toggleFreeze();
+    void updateFreezeButton();
+
+    // Recording the whole set to a file.
+    RightClickable<juce::TextButton> recordSetButton { "REC SET" };
+    SetRecorder setRecorder;
+    void toggleSetRecording();
+    void updateRecordSetButton();
     juce::TextButton setButton { "Set" }, settingsButton { "Audio Settings" };
     juce::Slider fadeTimeSlider;
     juce::Label fadeTimeLabel { {}, "Fade time" };
@@ -283,6 +294,8 @@ private:
     std::map<juce::String, Takeover> takeover;
     OutputLimiter outputLimiter;
     std::map<int, bool> ledState;   // MidiMix button lights as last sent
+    std::map<int, int> fireButtonState;   // Fire button lights as last sent
+    void updateFireButtons (bool allOff = false);
 
     struct PendingMidi { juce::String device; juce::MidiMessage message; };
     std::array<PendingMidi, 512> midiQueue;

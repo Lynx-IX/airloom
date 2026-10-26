@@ -1,4 +1,6 @@
-# Live Rig
+# Airloom
+
+*Audio performance rig* (formerly Live Rig).
 
 A standalone JUCE app for live ambient/healing performance, replacing FL Studio on stage.
 
@@ -24,17 +26,17 @@ cmake -S . -B %TEMP%\LiveRig-build -G "Visual Studio 18 2026" -A x64
 cmake --build %TEMP%\LiveRig-build --config Release
 ```
 
-The app is at `%TEMP%\LiveRig-build\LiveRig_artefacts\Release\Live Rig.exe`.
+The app is at `%TEMP%\LiveRig-build\LiveRig_artefacts\Release\Airloom.exe`.
 
 **For another computer:** run `powershell -ExecutionPolicy Bypass -File package.ps1`. It builds and puts a ready copy
-in `Release\Live Rig\` (the program plus *How to install.txt*) and `Release\Live Rig for Windows.zip`. The program has
+in `Release\Airloom\` (the program plus *How to install.txt*) and `Release\Airloom for Windows.zip`. The program has
 the C++ runtime built in, so it runs on any Windows 10/11 PC with nothing to install - just copy and double-click.
 
 Self-test (renders test signals through the real effects, looper and Fire pad code, and plays a note on Vital if
 it's installed; writes a pass/fail report; can run while the app is open):
 
 ```
-"Live Rig.exe" --fx-selftest "%TEMP%\liverig-fxtest.txt"
+"Airloom.exe" --fx-selftest "%TEMP%\liverig-fxtest.txt"
 ```
 
 ## How it works
@@ -179,6 +181,20 @@ The looper controls (REC, DUB, UNDO, loop length and status) sit in the middle o
 The **SET** clock in the header shows how long the set has been going: **START** begins it, **STOP** pauses it
 (START carries on), right-click resets it. Teal while running, amber while paused.
 
+## Recording the set
+
+**REC SET** (next to the set clock) records everything going to the speakers - after the master fader and limiter -
+to a WAV file, until pressed again. The button shows how long it has been recording. Files go to
+`Recordings/Sets/Set <date> <time>.wav` (right-click REC SET > **Show set recordings**). They're 24-bit stereo,
+about 1 GB an hour at 48 kHz.
+
+## Freeze
+
+**FREEZE** (bottom bar, next to STOP ALL) holds what you just played - the live inputs and instruments, with their
+effects, not the loops - as an endless pad to play over. It keeps listening for a quarter of a second after the press,
+to catch the note you're on. Press again (**FROZEN**) to let it go: it fades out over the **fade time**. Right-click
+to assign a MIDI button.
+
 ## Sets
 
 Everything - samples, rows, channels, volumes, mutes, effects, input settings, fade time - is a **set**. The working session is
@@ -190,7 +206,7 @@ saved automatically, so the app reopens exactly where you left off.
 - **Set > Save set** updates it; **Set > Open set...** opens a `.liverig`.
 - **Moving to another computer:** **Set > Export set as one file...** packs the set and every sample it uses (live-loop
   recordings included) into a single `.liverigpack` - copy it on a USB stick or cloud drive. On the other computer,
-  **Set > Open set...** and pick the pack: it unpacks into `Music\Live Rig Sets\<name>` and opens, ready to play.
+  **Set > Open set...** and pick the pack: it unpacks into `Music\Airloom Sets\<name>` and opens, ready to play.
   Plug-ins (Vital, Serum, Graillon...) can't travel in the pack - they need installing on each computer, often with a
   licence - so the pack includes **Plug-ins needed.txt** listing what to install; their settings are in the set and
   come back once they're installed.
@@ -202,12 +218,13 @@ press the hardware control. Learnable controls:
 
 - each channel's **PLAY/STOP**, **XF** and **volume** (a MIDI tag appears on the channel once it has any)
 - each group's **fader** and **mute**
-- master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, TAP
+- master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, TAP, FREEZE, REC SET
 
 Channel and group assignments are **saved with the set** (and travel in an exported pack), and follow the channel or
-group wherever it's moved. The rest belong to the computer. Out of the box only the MidiMix **master fader** and its
-first two **REC ARM** buttons (arm inputs 1-2) are assigned. MidiMix buttons light up: a group's mute while the group
-is on, a channel's play button while it plays, REC ARM while armed.
+group wherever it's moved. The rest belong to the computer. Out of the box only the MidiMix **master fader**, its
+first two **REC ARM** buttons (arm inputs 1-2) and the **Fire's REC button** (records a loop, like REC) are assigned.
+MidiMix buttons light up: a group's mute while the group is on, a channel's play button while it plays, REC ARM while
+armed. The Fire's REC button glows dim red when ready, bright red while recording and amber while overdubbing.
 
 Faders and knobs use **soft takeover**: a hardware control only grabs the on-screen one once it passes its position,
 so nothing jumps. On group and master faders an amber tick shows where the hardware is until then.

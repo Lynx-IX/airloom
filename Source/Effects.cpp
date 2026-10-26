@@ -83,6 +83,8 @@ void AmbientReverb::prepare (double newSampleRate)
     }
 
     currentDecay = currentSize = -1.0f;
+    freezeStep = 1.0f / (0.05f * (float) sampleRate);
+    freezeAmount = 0.0f;
     reset();
 }
 
@@ -125,74 +127,142 @@ void AmbientReverb::process (float* left, float* right, int numSamples, float mi
 {
     const float dryGain = 1.0f - 0.5f * mix;
     const float wetGain = mix * 0.6f;
-    const int predelaySize = (int) predelay.size();
 
     for (int n = 0; n < numSamples; ++n)
     {
-        // Pre-delay, then diffusion.
-        predelay[(size_t) predelayWrite] = 0.5f * (left[n] + right[n]);
-        int readPos = predelayWrite - predelaySamples;
-        if (readPos < 0)
-            readPos += predelaySize;
-        float x = predelay[(size_t) readPos];
-        if (++predelayWrite >= predelaySize)
-            predelayWrite = 0;
-
-        for (auto& d : diffusers)
-            x = d.process (x);
-
-        // Read each line at its (modulated) length.
-        float out[numLines];
-        for (int i = 0; i < numLines; ++i)
-        {
-            auto& line = lines[(size_t) i];
-            const int size = (int) line.size();
-            const float length = lineLength[(size_t) i] + modDepth * (1.0f + std::sin (lfoPhase[(size_t) i]));
-            lfoPhase[(size_t) i] += lfoStep[(size_t) i];
-            if (lfoPhase[(size_t) i] > juce::MathConstants<float>::twoPi)
-                lfoPhase[(size_t) i] -= juce::MathConstants<float>::twoPi;
-
-            float pos = (float) writePos[(size_t) i] - length;
-            while (pos < 0.0f)
-                pos += (float) size;
-            const int p0 = (int) pos;
-            const int p1 = (p0 + 1) % size;
-            const float frac = pos - (float) p0;
-            out[i] = line[(size_t) p0] + frac * (line[(size_t) p1] - line[(size_t) p0]);
-        }
-
-        // Damp (darker repeats) and scale each line for the decay time.
-        float fb[numLines];
-        for (int i = 0; i < numLines; ++i)
-        {
-            damp[(size_t) i] += dampCoeff * (out[i] - damp[(size_t) i]);
-            fb[i] = damp[(size_t) i] * feedback[(size_t) i];
-        }
-
-        // Mix all lines into each other (8-point Hadamard): energy-preserving and dense.
-        for (int len = 1; len < numLines; len <<= 1)
-            for (int i = 0; i < numLines; i += len << 1)
-                for (int j = i; j < i + len; ++j)
-                {
-                    const float a = fb[j], b = fb[j + len];
-                    fb[j] = a + b;
-                    fb[j + len] = a - b;
-                }
-
-        constexpr float norm = 0.35355339f;   // 1 / sqrt (8)
-        for (int i = 0; i < numLines; ++i)
-        {
-            auto& line = lines[(size_t) i];
-            line[(size_t) writePos[(size_t) i]] = fb[i] * norm + x * ((i & 1) ? 0.5f : -0.5f);
-            if (++writePos[(size_t) i] >= (int) line.size())
-                writePos[(size_t) i] = 0;
-        }
-
-        const float wetL = out[0] - out[2] + out[4] - out[6];
-        const float wetR = out[1] - out[3] + out[5] - out[7];
+        float wetL, wetR;
+        tick (0.5f * (left[n] + right[n]), wetL, wetR);
         left[n] = left[n] * dryGain + wetL * wetGain;
         right[n] = right[n] * dryGain + wetR * wetGain;
     }
+}
+
+void AmbientReverb::tick (float input, float& wetL, float& wetR)
+{
+    // Pre-delay, then diffusion.
+    const int predelaySize = (int) predelay.size();
+    predelay[(size_t) predelayWrite] = input;
+    int readPos = predelayWrite - predelaySamples;
+    if (readPos < 0)
+        readPos += predelaySize;
+    float x = predelay[(size_t) readPos];
+    if (++predelayWrite >= predelaySize)
+        predelayWrite = 0;
+
+    for (auto& d : diffusers)
+        x = d.process (x);
+
+    // Read each line at its (modulated) length.
+    float out[numLines];
+    for (int i = 0; i < numLines; ++i)
+    {
+        auto& line = lines[(size_t) i];
+        const int size = (int) line.size();
+        const float length = lineLength[(size_t) i] + modDepth * (1.0f + std::sin (lfoPhase[(size_t) i]));
+        lfoPhase[(size_t) i] += lfoStep[(size_t) i];
+        if (lfoPhase[(size_t) i] > juce::MathConstants<float>::twoPi)
+            lfoPhase[(size_t) i] -= juce::MathConstants<float>::twoPi;
+
+        float pos = (float) writePos[(size_t) i] - length;
+        while (pos < 0.0f)
+            pos += (float) size;
+        const int p0 = (int) pos;
+        const int p1 = (p0 + 1) % size;
+        const float frac = pos - (float) p0;
+        out[i] = line[(size_t) p0] + frac * (line[(size_t) p1] - line[(size_t) p0]);
+    }
+
+    // Frozen: glide to no damping and (almost) no loss, so the tail holds.
+    freezeAmount = frozen ? juce::jmin (1.0f, freezeAmount + freezeStep) : juce::jmax (0.0f, freezeAmount - freezeStep);
+    const float dampNow = dampCoeff + (1.0f - dampCoeff) * freezeAmount;
+
+    // Damp (darker repeats) and scale each line for the decay time.
+    float fb[numLines];
+    for (int i = 0; i < numLines; ++i)
+    {
+        damp[(size_t) i] += dampNow * (out[i] - damp[(size_t) i]);
+        fb[i] = damp[(size_t) i] * (feedback[(size_t) i] + (0.9998f - feedback[(size_t) i]) * freezeAmount);
+    }
+
+    // Mix all lines into each other (8-point Hadamard): energy-preserving and dense.
+    for (int len = 1; len < numLines; len <<= 1)
+        for (int i = 0; i < numLines; i += len << 1)
+            for (int j = i; j < i + len; ++j)
+            {
+                const float a = fb[j], b = fb[j + len];
+                fb[j] = a + b;
+                fb[j + len] = a - b;
+            }
+
+    constexpr float norm = 0.35355339f;   // 1 / sqrt (8)
+    for (int i = 0; i < numLines; ++i)
+    {
+        auto& line = lines[(size_t) i];
+        line[(size_t) writePos[(size_t) i]] = fb[i] * norm + x * ((i & 1) ? 0.5f : -0.5f);
+        if (++writePos[(size_t) i] >= (int) line.size())
+            writePos[(size_t) i] = 0;
+    }
+
+    wetL = out[0] - out[2] + out[4] - out[6];
+    wetR = out[1] - out[3] + out[5] - out[7];
+}
+
+//==============================================================================
+void FreezeHold::prepare (double newSampleRate)
+{
+    sampleRate = newSampleRate;
+    reverb.prepare (sampleRate);
+    // Big and fairly bright, with a slow shimmer of modulation; a 5 s tail while listening.
+    reverb.setParameters (5.0f, 0.9f, 0.3f, 0.0f, 0.5f);
+    reverb.setFrozen (false);
+    level = 0.0f;
+    listen = 1.0f;
+    sounding = false;
+}
+
+void FreezeHold::process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
+{
+    if (buffer.getNumChannels() < 2 || numSamples <= 0)
+        return;
+
+    juce::ScopedNoDenormals noDenormals;
+
+    const bool hold = held.load();
+    const float sr = (float) sampleRate;
+    const float listenStep = 1.0f / (0.25f * sr);     // keeps listening for a moment, to catch the note being played
+    const float fadeInStep = 1.0f / (0.3f * sr);
+    const float fadeOutStep = 1.0f / (juce::jmax (0.3f, releaseSeconds.load()) * sr);
+    constexpr float outputGain = 0.25f;   // sits a little under the playing
+
+    // Stays frozen until the pad has faded right out.
+    reverb.setFrozen (hold || level > 0.0f);
+
+    float* left = buffer.getWritePointer (0, startSample);
+    float* right = buffer.getWritePointer (1, startSample);
+
+    for (int n = 0; n < numSamples; ++n)
+    {
+        if (hold)
+        {
+            listen = juce::jmax (0.0f, listen - listenStep);
+            level = juce::jmin (1.0f, level + fadeInStep);
+        }
+        else
+        {
+            level = juce::jmax (0.0f, level - fadeOutStep);
+            if (level <= 0.0f)
+                listen = juce::jmin (1.0f, listen + listenStep);
+        }
+
+        float wetL, wetR;
+        reverb.tick (0.5f * (left[n] + right[n]) * listen, wetL, wetR);
+
+        const float g = level * level * (3.0f - 2.0f * level) * outputGain;   // smooth fades both ways
+        left[n] += wetL * g;
+        right[n] += wetR * g;
+    }
+
+    sounding = hold || level > 0.0f;
 }
 
 //==============================================================================
