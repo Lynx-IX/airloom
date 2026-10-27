@@ -273,6 +273,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
         e->setAttribute ("mute", inst.muted);
         e->setAttribute ("recordWithFx", inst.recordWithFx);
         e->setAttribute ("midiSource", inst.midiSource);
+        e->setAttribute ("midiSourceId", inst.midiSourceId);
         e->setAttribute ("padRoot", inst.padRoot);
         e->setAttribute ("padScale", inst.padScale);
         e->setAttribute ("padOctave", inst.padOctave);
@@ -429,6 +430,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
         inst.muted = e->getBoolAttribute ("mute");
         inst.recordWithFx = e->getBoolAttribute ("recordWithFx", true);
         inst.midiSource = e->getStringAttribute ("midiSource");
+        inst.midiSourceId = e->getStringAttribute ("midiSourceId");
         inst.padRoot = juce::jlimit (0, 11, e->getIntAttribute ("padRoot", 9));
         inst.padScale = e->getIntAttribute ("padScale", 0);
         inst.padOctave = juce::jlimit (0, 7, e->getIntAttribute ("padOctave", 3));

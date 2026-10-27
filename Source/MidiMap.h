@@ -62,6 +62,10 @@ public:
     static constexpr const char* fireName = "FIRE";
     static constexpr int fireRecNote = 53;   // the Akai Fire's REC button (its light is CC 53)
     static constexpr int firePlayNote = 51;  // its PLAY button: Airloom's beat light (CC 51)
+    // With SHIFT held, these run the pads' light show: ALT on/off, GRID < > pattern, PATTERN up/down palette.
+    static constexpr int fireShiftNote = 48, fireAltNote = 49, fireGridLeftNote = 34, fireGridRightNote = 35,
+                         firePatternUpNote = 31, firePatternDownNote = 32,
+                         fireBrowserNote = 33;   // SHIFT + BROWSER: where this Fire sits beside the other (joined light show)
 
 private:
     std::map<juce::String, MidiBinding> bindings;

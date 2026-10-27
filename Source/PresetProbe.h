@@ -11,6 +11,8 @@ namespace PresetProbe
     inline juce::String run()
     {
         juce::StringArray report;
+        for (const auto& d : juce::MidiInput::getAvailableDevices())
+            report.add ("MIDI IN  \"" + d.name + "\"  id: " + d.identifier);
         juce::AudioPluginFormatManager formats;
         juce::addDefaultFormatsToManager (formats);
 

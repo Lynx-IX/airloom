@@ -562,6 +562,7 @@ void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRat
     outputLimiter.prepare (sampleRate);
     freezeHold.prepare (sampleRate);
     spaceReverb.prepare (sampleRate, samplesPerBlockExpected);
+    fireVisualizer.prepare (sampleRate);
     masterInsert.prepare (sampleRate, samplesPerBlockExpected);
 }
 
@@ -635,6 +636,9 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 
     lastCallbackMs = juce::Time::getMillisecondCounter();
     setRecorder.write (buffer, info.startSample, info.numSamples);
+    if (outChannels > 0)
+        fireVisualizer.push (buffer.getReadPointer (0, info.startSample),
+                             outChannels > 1 ? buffer.getReadPointer (1, info.startSample) : nullptr, info.numSamples);
 
     if (outChannels > 0) masterPeakL = juce::jmax (masterPeakL.load(), buffer.getMagnitude (0, info.startSample, info.numSamples));
     if (outChannels > 1) masterPeakR = juce::jmax (masterPeakR.load(), buffer.getMagnitude (1, info.startSample, info.numSamples));
@@ -2663,7 +2667,9 @@ juce::String MainComponent::instrumentDetail (int i) const
     if (auto* p = instrumentEngines[(size_t) i]->getPlugin(); p != nullptr && instrumentName (i) != p->getName())
         plugin = p->getName() + "  -  ";
 
-    const auto from = inst.midiSource.isEmpty() ? juce::String ("All keys") : inst.midiSource;
+    const auto source = midiSourceFor (i);
+    const auto from = inst.midiSource.isEmpty() ? juce::String ("All keys")
+                    : inst.midiSource + (inst.midiSourceId.isNotEmpty() && ! source.connected ? " (unplugged)" : "");
     return plugin + from + "  -  " + layout.describe() + (inst.recordWithFx ? juce::String() : "  -  dry");
 }
 
@@ -2749,7 +2755,7 @@ void MainComponent::applyInstrument (int i)
     engine.setMuted (inst.muted);
     engine.setArmed (inst.armed);
     engine.setRecordWithFx (inst.recordWithFx);
-    engine.setMidiSource (inst.midiSource);
+    updateMidiSources();
     engine.getFx().setSettings (inst.fx);
 
     PadLayout layout;
@@ -2965,12 +2971,17 @@ void MainComponent::showInstrumentMenu (int i)
     // Where its notes come from.
     juce::PopupMenu midiFrom;
     midiFrom.addItem (10, "All keyboards and the Fire", true, inst.midiSource.isEmpty());
-    juce::StringArray devices;
+    juce::Array<juce::MidiDeviceInfo> devices;
     for (auto& d : juce::MidiInput::getAvailableDevices())
         if (! d.name.removeCharacters (" ").containsIgnoreCase ("MIDIMix"))
-            devices.add (d.name);
+            devices.add (d);
+    const auto source = midiSourceFor (i);
     for (int d = 0; d < devices.size(); ++d)
-        midiFrom.addItem (11 + d, devices[d], true, inst.midiSource == devices[d]);
+        midiFrom.addItem (11 + d, devices[d].name, true,
+                          inst.midiSource.isNotEmpty() && InstrumentChannel::playsFrom (source, devices[d].name, devices[d].identifier));
+    if (inst.midiSourceId.isNotEmpty() && ! source.connected)
+        midiFrom.addItem (-2, inst.midiSource + " (not plugged in - plays the other " + InstrumentChannel::baseName (inst.midiSource) + ")",
+                          false, true);
     m.addSubMenu ("Play from", midiFrom);
 
     // The Fire's pad keyboard.
@@ -3028,8 +3039,8 @@ void MainComponent::showInstrumentMenu (int i)
             return;
         }
         if (r == 4) in.label = {};
-        if (r == 10) in.midiSource = {};
-        if (r >= 11 && r < 11 + devices.size()) in.midiSource = devices[r - 11];
+        if (r == 10) { in.midiSource = {}; in.midiSourceId = {}; }
+        if (r >= 11 && r < 11 + devices.size()) { in.midiSource = devices[r - 11].name; in.midiSourceId = devices[r - 11].identifier; }
         if (r >= 100 && r < 112) in.padRoot = r - 100;
         if (r >= 120 && r < 120 + PadLayout::numScales) in.padScale = r - 120;
         if (r >= 141 && r <= 146) in.padOctave = r - 140;
@@ -3118,8 +3129,11 @@ void MainComponent::updateFireLights (bool allOff)
     // Each Fire plays the first instrument listening to it; light that one's scale on its pads.
     for (auto& fire : fireOutputs)
     {
+        if (! allOff && lightShowOf (fire).on)
+            continue;   // showing the light show instead
+
         PadLayout chosen;
-        const PadLayout* layout = ! allOff && currentKey (chosen, fire.name) ? &chosen : nullptr;
+        const PadLayout* layout = ! allOff && currentKey (chosen, fire.name, fire.inputId) ? &chosen : nullptr;
 
         // Akai Fire pad colours: F0 47 7F 43 65 <length> then (pad, red, green, blue) per pad, 0-127 each.
         juce::MemoryBlock data;
@@ -3141,6 +3155,82 @@ void MainComponent::updateFireLights (bool allOff)
         }
 
         fire.output->sendMessageNow (juce::MidiMessage::createSysExMessage (data.getData(), (int) data.getSize()));
+    }
+}
+
+MainComponent::LightShow& MainComponent::lightShowFor (const FireOutput& fire)
+{
+    return fireLightShows[fire.inputId.isNotEmpty() ? fire.inputId : fire.name];
+}
+
+MainComponent::FireOutput* MainComponent::partnerOf (const FireOutput& fire)
+{
+    // The other Fire, sitting opposite this one (left/right, top/bottom).
+    const int position = lightShowOf (fire).position;
+    if (position == separate)
+        return nullptr;
+    const int opposite = position == left ? right : position == right ? left : position == top ? bottom : top;
+    for (auto& other : fireOutputs)
+        if (&other != &fire && lightShowOf (other).position == opposite)
+            return &other;
+    return nullptr;
+}
+
+MainComponent::LightShow MainComponent::lightShowOf (const FireOutput& fire) const
+{
+    const auto it = fireLightShows.find (fire.inputId.isNotEmpty() ? fire.inputId : fire.name);
+    return it != fireLightShows.end() ? it->second : LightShow();
+}
+
+void MainComponent::sendFirePads (FireOutput& fire, const std::array<juce::Colour, 64>& pads)
+{
+    // Akai Fire pad colours: F0 47 7F 43 65 <length> then (pad, red, green, blue) per pad, 0-127 each.
+    // Curved (power 1.8), since the pads are much brighter at low values than a screen.
+    juce::MemoryBlock data;
+    const juce::uint8 header[] = { 0x47, 0x7f, 0x43, 0x65, (juce::uint8) ((64 * 4) >> 7), (juce::uint8) ((64 * 4) & 0x7f) };
+    data.append (header, sizeof (header));
+    auto level = [] (float v) { return (juce::uint8) juce::jlimit (0, 127, juce::roundToInt (std::pow (v, 1.8f) * 127.0f)); };
+    for (int pad = 0; pad < 64; ++pad)
+    {
+        const auto& c = pads[(size_t) pad];
+        const juce::uint8 entry[] = { (juce::uint8) pad, level (c.getFloatRed()), level (c.getFloatGreen()), level (c.getFloatBlue()) };
+        data.append (entry, sizeof (entry));
+    }
+    fire.output->sendMessageNow (juce::MidiMessage::createSysExMessage (data.getData(), (int) data.getSize()));
+}
+
+void MainComponent::updateFireLightShow()
+{
+    if (std::none_of (fireOutputs.begin(), fireOutputs.end(), [this] (const FireOutput& f) { return lightShowOf (f).on; }))
+        return;
+
+    bool counting = false;
+    const double beats = currentBeatPosition (counting);
+    fireVisualizer.update (beats, anyLoopPlaying() || looper.getState() != Looper::State::idle);
+
+    // One picture per pattern, palette and shape in use, shared by every Fire showing it. Two
+    // joined Fires get one picture across both (32 x 4 side by side, 16 x 8 stacked), each its part.
+    std::map<std::tuple<int, int, int>, std::vector<juce::Colour>> frames;
+    for (auto& fire : fireOutputs)
+    {
+        const auto show = lightShowOf (fire);
+        if (! show.on)
+            continue;
+
+        const int shape = partnerOf (fire) != nullptr ? (show.position == left || show.position == right ? 1 : 2) : 0;
+        const int width = shape == 1 ? 32 : 16, height = shape == 2 ? 8 : 4;
+        const auto key = std::make_tuple (show.pattern, show.palette, shape);
+        if (frames.find (key) == frames.end())
+            frames[key] = fireVisualizer.render (show.pattern, show.palette, width, height);
+        const auto& frame = frames[key];
+
+        const int offsetX = show.position == right && shape == 1 ? 16 : 0;
+        const int offsetY = show.position == bottom && shape == 2 ? 4 : 0;
+        std::array<juce::Colour, 64> pads;
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 16; ++c)
+                pads[(size_t) (r * 16 + c)] = frame[(size_t) ((r + offsetY) * width + c + offsetX)];
+        sendFirePads (fire, pads);
     }
 }
 
@@ -3211,14 +3301,14 @@ void MainComponent::recPressed()
     repaint();
 }
 
-bool MainComponent::currentKey (PadLayout& key, const juce::String& fireName) const
+bool MainComponent::currentKey (PadLayout& key, const juce::String& fireName, const juce::String& fireId) const
 {
     // The key of the first instrument the Fire plays: the one being performed in.
     for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
     {
         const auto& inst = liveSet.instruments[(size_t) i];
         const bool fromThisFire = fireName.isEmpty() ? inst.midiSource.isEmpty() || inst.midiSource.containsIgnoreCase ("FIRE")
-                                                     : InstrumentChannel::playsFrom (inst.midiSource, fireName);
+                                                     : InstrumentChannel::playsFrom (midiSourceFor (i), fireName, fireId);
         if (instrumentEngines[(size_t) i]->getPlugin() != nullptr && fromThisFire)
         {
             key.root = inst.padRoot;
@@ -4511,10 +4601,11 @@ void MainComponent::askChoice (const juce::String& title, const juce::String& me
 void MainComponent::handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& m)
 {
     const auto device = source != nullptr ? source->getName() : juce::String();
+    const auto deviceId = source != nullptr ? source->getIdentifier() : juce::String();
 
     // Notes go straight to the instruments from this MIDI thread, for the lowest latency.
     for (auto& inst : instrumentEngines)
-        inst->handleMidi (device, m);
+        inst->handleMidi (device, deviceId, m);
 
     if (! (m.isController() || m.isNoteOnOrOff()))
         return;
@@ -4550,17 +4641,137 @@ void MainComponent::enableMidiInputs()
             ledOutput = juce::MidiOutput::openDevice (d.identifier);
         else if (d.name.containsIgnoreCase ("FIRE"))
             if (auto out = juce::MidiOutput::openDevice (d.identifier))
-                fireOutputs.push_back ({ d.name, std::move (out) });
+            {
+                // Its input is the one on the same USB port (the path up to the interface GUID), else the same name.
+                juce::String inputId;
+                const auto port = d.identifier.toLowerCase().upToLastOccurrenceOf ("#{", false, false);
+                for (const auto& in : juce::MidiInput::getAvailableDevices())
+                    if ((port.isNotEmpty() && in.identifier.toLowerCase().upToLastOccurrenceOf ("#{", false, false) == port)
+                        || (inputId.isEmpty() && in.name == d.name))
+                        inputId = in.identifier;
+                fireOutputs.push_back ({ d.name, inputId, std::move (out) });
+            }
     }
 
+    updateMidiSources();
     updateMidiLeds();
     updateFireLights();
     repaint();
 }
 
+InstrumentChannel::MidiSource MainComponent::midiSourceFor (int i) const
+{
+    const auto devices = juce::MidiInput::getAvailableDevices();
+    auto isConnected = [&devices] (const juce::String& id)
+    {
+        return id.isNotEmpty() && std::any_of (devices.begin(), devices.end(), [&id] (const juce::MidiDeviceInfo& d) { return d.identifier == id; });
+    };
+
+    const auto& inst = liveSet.instruments[(size_t) i];
+    InstrumentChannel::MidiSource s { inst.midiSource, inst.midiSourceId, isConnected (inst.midiSourceId), {} };
+    for (int j = 0; j < (int) liveSet.instruments.size(); ++j)
+        if (j != i && isConnected (liveSet.instruments[(size_t) j].midiSourceId))
+            s.takenIds.addIfNotAlreadyThere (liveSet.instruments[(size_t) j].midiSourceId);
+    return s;
+}
+
+void MainComponent::updateMidiSources()
+{
+    const auto devices = juce::MidiInput::getAvailableDevices();
+    for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
+    {
+        auto& inst = liveSet.instruments[(size_t) i];
+        for (const auto& d : devices)
+        {
+            // A set saved before devices were known by USB path: adopt the device with that exact name.
+            if (inst.midiSourceId.isEmpty() && inst.midiSource.isNotEmpty() && d.name == inst.midiSource)
+                inst.midiSourceId = d.identifier;
+            // Windows renamed it ("FL STUDIO FIRE" -> "3 - FL STUDIO FIRE"): show its name now.
+            if (inst.midiSourceId.isNotEmpty() && d.identifier == inst.midiSourceId)
+                inst.midiSource = d.name;
+        }
+    }
+
+    for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
+        instrumentEngines[(size_t) i]->setMidiSource (midiSourceFor (i));
+}
+
 void MainComponent::handleMidi (const juce::String& device, const juce::MidiMessage& m)
 {
     const bool pressed = (m.isNoteOn() && m.getVelocity() > 0) || (m.isController() && m.getControllerValue() >= 64);
+
+    // On a Fire, SHIFT + ALT steps its pads through the light show: spectrum, glow, back to the key.
+    if (device.containsIgnoreCase (MidiMap::fireName) && m.isNoteOnOrOff())
+    {
+        if (m.getNoteNumber() == MidiMap::fireShiftNote)
+            fireShiftHeld[device] = pressed;
+
+        const int note = m.getNoteNumber();
+        const bool lightShowButton = note == MidiMap::fireAltNote || note == MidiMap::fireGridLeftNote || note == MidiMap::fireGridRightNote
+                                  || note == MidiMap::firePatternUpNote || note == MidiMap::firePatternDownNote
+                                  || note == MidiMap::fireBrowserNote;
+        if (lightShowButton && fireShiftHeld[device])
+        {
+            if (! pressed)
+                return;
+
+            for (auto& fire : fireOutputs)
+            {
+                if (fire.name != device)
+                    continue;
+                auto& show = lightShowFor (fire);
+                const auto wrap = [] (int v, int n) { return (v % n + n) % n; };
+
+                // Where this Fire sits: separate, left, right, top, bottom. The other Fire takes the
+                // opposite place, and the two then show one picture across both.
+                if (note == MidiMap::fireBrowserNote)
+                {
+                    show.position = wrap (show.position + 1, numFirePositions);
+                    show.on = true;
+                    for (auto& other : fireOutputs)
+                    {
+                        if (&other == &fire)
+                            continue;
+                        auto& theirs = lightShowFor (other);
+                        theirs.position = show.position == separate ? (int) separate
+                                        : show.position == left ? (int) right : show.position == right ? (int) left
+                                        : show.position == top ? (int) bottom : (int) top;
+                        if (show.position != separate)
+                            theirs = { true, show.pattern, show.palette, theirs.position };
+                        break;
+                    }
+                    static const char* places[] = { "on its own", "on the LEFT", "on the RIGHT", "on TOP", "BELOW" };
+                    infoMessage = device + " light show " + places[show.position]
+                                + (show.position == separate ? juce::String() : " - joined with the other Fire")
+                                + "   (SHIFT + BROWSER to move it)";
+                    continue;
+                }
+
+                if (note == MidiMap::fireAltNote)                show.on = ! show.on;
+                else if (note == MidiMap::fireGridRightNote)     { show.pattern = wrap (show.pattern + 1, FireVisualizer::numPatterns); show.on = true; }
+                else if (note == MidiMap::fireGridLeftNote)      { show.pattern = wrap (show.pattern - 1, FireVisualizer::numPatterns); show.on = true; }
+                else if (note == MidiMap::firePatternUpNote)     { show.palette = wrap (show.palette + 1, FireVisualizer::numPalettes); show.on = true; }
+                else if (note == MidiMap::firePatternDownNote)   { show.palette = wrap (show.palette - 1, FireVisualizer::numPalettes); show.on = true; }
+
+                // Joined Fires change together.
+                if (auto* partner = partnerOf (fire))
+                {
+                    auto& theirs = lightShowFor (*partner);
+                    theirs.on = show.on;
+                    theirs.pattern = show.pattern;
+                    theirs.palette = show.palette;
+                }
+
+                infoMessage = show.on ? device + " light show: " + FireVisualizer::patternName (show.pattern) + " in "
+                                            + FireVisualizer::paletteName (show.palette)
+                                            + "   (SHIFT + GRID < > pattern, SHIFT + PATTERN up/down colours, SHIFT + ALT off)"
+                                      : device + " light show off - showing the key again";
+            }
+            updateFireLights();
+            repaint();
+            return;
+        }
+    }
 
     if (learnTarget.isNotEmpty())
     {
@@ -5052,6 +5263,7 @@ void MainComponent::timerCallback()
     updateRecordSetButton();
     updateMuteButton();
     updatePerfMeter();
+    updateFireLightShow();
 
     if (juce::Time::getMillisecondCounter() - lastPresetCheck > 2000)
     {

@@ -156,7 +156,10 @@ Hosted instruments sit in the INPUTS section next to Mic and Instrument (up to 4
 - *Play from* (in its menu) limits an instrument to one controller, e.g. the Fire for a pad and the MPK for a lead.
   With **two Fires** (Windows lists the second as "2 - FL STUDIO FIRE") set each instrument to its own Fire to split
   them: each Fire then plays only its instrument and lights its pads in that instrument's key. An instrument left on
-  *All keyboards and the Fire* is played by both.
+  *All keyboards and the Fire* is played by both. Airloom knows each Fire by the **USB port** it's plugged into, so
+  unplugging and replugging is fine even though Windows renames it ("3 - FL STUDIO FIRE"). Plugged into a different
+  port, a Fire is taken to be the one no other instrument is using (the instrument's line shows "unplugged" for its
+  old one); pick it again in *Play from* to make that its port.
 - The plug-in and all its settings are saved with the set and reload when you open it. Instruments also receive the
   set's BPM, so their own synced delays and arpeggiators follow TAP.
 
@@ -249,6 +252,31 @@ strip above the groups holds them. Set up a mix and press **+ SCENE** to save it
 
 The bottom bar (looper, tempo, SYNC, STOP ALL) and the count-in stay as they are. Press **MIXER** (or F11) to go back;
 Airloom remembers which view you were in. Right-click STAGE to put it on a MIDI button.
+
+## Fire light show
+
+A Fire's pads can show a light show driven by what's going to the speakers. On the Fire, **hold SHIFT** and press:
+
+| Button | Does |
+| --- | --- |
+| **ALT** | Light show on / off (back to the key lights). Remembers the last pattern and colours. |
+| **GRID >** / **GRID <** | Next / previous pattern (switches it on) |
+| **PATTERN up** / **down** | Next / previous colour palette |
+| **BROWSER** | Join the two Fires into one display: steps this Fire through *on its own -> left -> right -> top -> below* |
+
+Patterns: **Spectrum** (bars, lows on the left), **Mirror** (lows in the middle, bars growing up and down),
+**Glow** (slow colour waves), **Plasma** (flowing colour field), **Waves** (two lines snaking across - lows and
+highs), **Bursts** (rings bursting out on each beat, or each new sound when nothing's in time), **Kaleidoscope**
+(spokes turning round the centre), **Diamonds** (diamond rings flowing out, a bright one on the beat), **Stars**
+(twinkles where the music is loud). Palettes: Ambient, Aurora, Ember, Ocean, Rainbow, Moon.
+
+Everything moves faster and brighter as the music fills out, and adjusts to the level so quiet passages still show.
+Each Fire has its own setting; the pads keep playing their instrument. The status line shows the pattern and palette.
+
+**Two Fires as one display:** press SHIFT + BROWSER on a Fire to say where it sits - left, right, top or below - and
+the other Fire takes the opposite place. They then show one picture across both: 32 x 4 side by side, or 16 x 8
+stacked (bars twice as tall). Waves, bursts and rings travel from one into the other, and a pattern or palette change
+on either changes both. Keep pressing to go back to *on its own*. The positions are remembered for each Fire's USB port.
 
 ## Time signature
 

@@ -121,20 +121,43 @@ public:
     void setMuted (bool shouldMute)   { muted = shouldMute; }
     void setArmed (bool shouldArm)    { armed = shouldArm; }
     void setRecordWithFx (bool wet)   { recordWithFx = wet; }
-    // The one MIDI device that plays it (its full name), or empty for every keyboard and Fire.
-    void setMidiSource (const juce::String& deviceName);
-
-    // True if notes from this device play an instrument set to 'source'. Exact names, since
-    // Windows calls a second Fire "2 - FL STUDIO FIRE", which contains the first one's name.
-    static bool playsFrom (const juce::String& source, const juce::String& deviceName)
+    // Which MIDI device plays it. A device is known by its USB path ('id'), which stays the same
+    // when Windows renames it - a replugged Fire can come back as "3 - FL STUDIO FIRE".
+    struct MidiSource
     {
-        return source.isEmpty() || deviceName.trim().equalsIgnoreCase (source.trim());
+        juce::String name, id;          // both empty: every keyboard and Fire
+        bool connected = false;         // that exact device is plugged in (same USB port)
+        juce::StringArray takenIds;     // devices other instruments are set to
+    };
+    void setMidiSource (const MidiSource& source);
+
+    // "3 - FL STUDIO FIRE" -> "FL STUDIO FIRE": the name without Windows' number.
+    static juce::String baseName (const juce::String& deviceName)
+    {
+        const auto t = deviceName.trim();
+        const auto number = t.upToFirstOccurrenceOf (" - ", false, false);
+        return number.isNotEmpty() && number.containsOnly ("0123456789") && t.contains (" - ")
+                   ? t.fromFirstOccurrenceOf (" - ", false, false).trim() : t;
+    }
+
+    // True if notes from this device play an instrument set to 'source'. Its own device when
+    // that's plugged in; otherwise (moved to another USB port, or a set from another computer)
+    // the same kind of device by name - one no other instrument is set to.
+    static bool playsFrom (const MidiSource& source, const juce::String& deviceName, const juce::String& deviceId)
+    {
+        if (source.name.isEmpty() && source.id.isEmpty())
+            return true;
+        if (source.id.isNotEmpty() && source.connected)
+            return deviceId == source.id;
+        if (source.takenIds.contains (deviceId))
+            return false;
+        return baseName (deviceName).equalsIgnoreCase (baseName (source.name));
     }
     void setLayout (const PadLayout& newLayout);
     FxChain& getFx()                  { return fx; }
 
     // Called for every incoming MIDI message, from the MIDI thread.
-    void handleMidi (const juce::String& deviceName, const juce::MidiMessage& m);
+    void handleMidi (const juce::String& deviceName, const juce::String& deviceId, const juce::MidiMessage& m);
 
     std::pair<float, float> takePeaks()  { return { peakL.exchange (0.0f), peakR.exchange (0.0f) }; }
 
@@ -166,7 +189,7 @@ private:
     int blockSize = 512;
 
     juce::SpinLock configLock;                           // guards the two below for the MIDI thread
-    juce::String midiSource;
+    MidiSource midiSource;
     PadLayout layout;
     std::array<int, 64> padNotes;                        // the note each held pad started (Fire's MIDI thread)
 

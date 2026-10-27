@@ -60,10 +60,10 @@ std::unique_ptr<juce::AudioPluginInstance> InstrumentChannel::setPlugin (std::un
     return newPlugin;   // the previous plugin; the caller frees it off the audio thread
 }
 
-void InstrumentChannel::setMidiSource (const juce::String& deviceName)
+void InstrumentChannel::setMidiSource (const MidiSource& source)
 {
     const juce::SpinLock::ScopedLockType sl (configLock);
-    midiSource = deviceName;
+    midiSource = source;
 }
 
 void InstrumentChannel::setLayout (const PadLayout& newLayout)
@@ -72,13 +72,13 @@ void InstrumentChannel::setLayout (const PadLayout& newLayout)
     layout = newLayout;
 }
 
-void InstrumentChannel::handleMidi (const juce::String& deviceName, const juce::MidiMessage& m)
+void InstrumentChannel::handleMidi (const juce::String& deviceName, const juce::String& deviceId, const juce::MidiMessage& m)
 {
     // The MidiMix is a mixer, never a keyboard.
     if (deviceName.removeCharacters (" ").containsIgnoreCase ("MIDIMix"))
         return;
 
-    juce::String source;
+    MidiSource source;
     PadLayout pads;
     {
         const juce::SpinLock::ScopedLockType sl (configLock);
@@ -86,7 +86,7 @@ void InstrumentChannel::handleMidi (const juce::String& deviceName, const juce::
         pads = layout;
     }
 
-    if (! playsFrom (source, deviceName))
+    if (! playsFrom (source, deviceName, deviceId))
         return;
 
     if (deviceName.containsIgnoreCase ("FIRE"))

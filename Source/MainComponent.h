@@ -16,6 +16,7 @@
 #include "SceneBar.h"
 #include "StageView.h"
 #include "PresetName.h"
+#include "FireVisualizer.h"
 #include "SamplePool.h"
 #include "SetRecorder.h"
 #include "StageStatus.h"
@@ -207,7 +208,12 @@ private:
     void applyFaderMidi (const juce::String& target, juce::Slider& fader, float proportion,
                          const std::function<void (float)>& showHardwarePosition = {});
     // The key of the first instrument a Fire plays ('fireName' = that Fire; empty = any Fire).
-    bool currentKey (PadLayout& key, const juce::String& fireName = {}) const;
+    bool currentKey (PadLayout& key, const juce::String& fireName = {}, const juce::String& fireId = {}) const;
+
+    // Each instrument's MIDI device, matched by USB path (see InstrumentChannel::MidiSource);
+    // also picks up a device's new name after Windows renames it.
+    InstrumentChannel::MidiSource midiSourceFor (int instrument) const;
+    void updateMidiSources();
     juce::String nextLoopLabel (const Row& row) const;
     juce::Array<juce::PluginDescription> instrumentTypes() const;
     juce::String instrumentName (int index) const;
@@ -311,7 +317,22 @@ private:
     std::atomic<int> currentBlockSize { 512 };
     juce::uint32 lastStateCapture = 0;
     // Every connected Fire, by name: each lights its pads in the key of the instrument it plays.
-    struct FireOutput { juce::String name; std::unique_ptr<juce::MidiOutput> output; };
+    struct FireOutput { juce::String name, inputId; std::unique_ptr<juce::MidiOutput> output; };
+
+    // Light show: a Fire's pads as a visualizer of the output. On the Fire, with SHIFT held:
+    // ALT turns it on and off, GRID left/right picks the pattern, PATTERN up/down the palette.
+    // Kept per Fire, by its USB path.
+    // 'position' joins two Fires into one display: where this one sits beside the other.
+    enum FirePosition { separate, left, right, top, bottom, numFirePositions };
+    struct LightShow { bool on = false; int pattern = 0, palette = 0, position = separate; };
+    LightShow& lightShowFor (const FireOutput& fire);
+    FireOutput* partnerOf (const FireOutput& fire);
+    FireVisualizer fireVisualizer;
+    std::map<juce::String, LightShow> fireLightShows;
+    std::map<juce::String, bool> fireShiftHeld;    // by device name
+    LightShow lightShowOf (const FireOutput& fire) const;
+    void sendFirePads (FireOutput& fire, const std::array<juce::Colour, 64>& pads);
+    void updateFireLightShow();
     std::vector<FireOutput> fireOutputs;
     juce::AudioBuffer<float> inputCapture;   // audio thread: the interface inputs for this block
     juce::AudioBuffer<float> recordBus;      // audio thread: armed inputs for the looper

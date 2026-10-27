@@ -108,7 +108,8 @@ struct LiveSet
         bool muted = false;
         bool recordWithFx = true;
         FxSettings fx;
-        juce::String midiSource;       // the MIDI device that plays it; empty = every keyboard and Fire
+        juce::String midiSource;       // the MIDI device that plays it (its name when last seen); empty = every keyboard and Fire
+        juce::String midiSourceId;     // that device's USB path, which survives Windows renaming it
         int padRoot = 9, padScale = 0, padOctave = 3;
 
         bool armed = false;            // runtime, like the inputs

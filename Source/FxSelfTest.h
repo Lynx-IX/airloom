@@ -12,6 +12,7 @@
 #include "FxPanel.h"
 #include "StageView.h"
 #include "PresetName.h"
+#include "FireVisualizer.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
@@ -419,12 +420,21 @@ namespace FxSelfTest
                        && MidiMap::isSetTarget ("fx.space.reverbShimmer") && ! MidiMap::isSetTarget ("fx.in.0.reverbMix"),
                    "Effect knobs on groups, channels and Space are saved with the set; input ones with the computer");
 
-            // Two Fires: Windows names the second "2 - FL STUDIO FIRE", which contains the first one's name.
-            check (InstrumentChannel::playsFrom ("FL STUDIO FIRE", "FL STUDIO FIRE")
-                       && ! InstrumentChannel::playsFrom ("FL STUDIO FIRE", "2 - FL STUDIO FIRE")
-                       && ! InstrumentChannel::playsFrom ("2 - FL STUDIO FIRE", "FL STUDIO FIRE")
-                       && InstrumentChannel::playsFrom ({}, "2 - FL STUDIO FIRE"),
-                   "With two Fires, an instrument set to one Fire isn't played by the other");
+            // Two Fires, known by USB path: Windows' names change when one is replugged.
+            using Source = InstrumentChannel::MidiSource;
+            const Source fireA { "2 - FL STUDIO FIRE", "usb-port-A", true, { "usb-port-B" } };
+            check (InstrumentChannel::playsFrom (fireA, "3 - FL STUDIO FIRE", "usb-port-A")
+                       && ! InstrumentChannel::playsFrom (fireA, "FL STUDIO FIRE", "usb-port-B")
+                       && InstrumentChannel::playsFrom ({}, "2 - FL STUDIO FIRE", "usb-port-B"),
+                   "With two Fires, an instrument set to one isn't played by the other - even after Windows renames it");
+
+            // Its Fire moved to another USB port: it plays the Fire no other instrument has.
+            const Source moved { "FL STUDIO FIRE", "usb-port-A", false, { "usb-port-B" } };
+            check (InstrumentChannel::playsFrom (moved, "4 - FL STUDIO FIRE", "usb-port-C")
+                       && ! InstrumentChannel::playsFrom (moved, "2 - FL STUDIO FIRE", "usb-port-B")
+                       && ! InstrumentChannel::playsFrom (moved, "MPK mini 3", "usb-port-D")
+                       && InstrumentChannel::baseName ("3 - FL STUDIO FIRE") == "FL STUDIO FIRE",
+                   "An instrument whose Fire moved USB port plays the other Fire, not the one already taken");
         }
 
         // ---- Looper ----
@@ -1036,11 +1046,11 @@ namespace FxSelfTest
             // A pad held while the layout changes must still release the note it started.
             InstrumentChannel channel;
             channel.prepare (sr, 512);
-            channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOn (1, 54 + bottomLeft, (juce::uint8) 100).withTimeStamp (0.0));
+            channel.handleMidi ("FL STUDIO FIRE", {}, juce::MidiMessage::noteOn (1, 54 + bottomLeft, (juce::uint8) 100).withTimeStamp (0.0));
             PadLayout moved;
             moved.root = 0;
             channel.setLayout (moved);
-            channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOff (1, 54 + bottomLeft).withTimeStamp (0.0));
+            channel.handleMidi ("FL STUDIO FIRE", {}, juce::MidiMessage::noteOff (1, 54 + bottomLeft).withTimeStamp (0.0));
             check (true, "Pad note-off after a layout change handled without error");
         }
 
@@ -1093,9 +1103,9 @@ namespace FxSelfTest
                         play (20);   // let it settle
                         const float before = play (10);
                         const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
-                        channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOn (1, 54 + 48, (juce::uint8) 110).withTimeStamp (now));
+                        channel.handleMidi ("FL STUDIO FIRE", {}, juce::MidiMessage::noteOn (1, 54 + 48, (juce::uint8) 110).withTimeStamp (now));
                         const float during = play (60);
-                        channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOff (1, 54 + 48).withTimeStamp (now + 0.6));
+                        channel.handleMidi ("FL STUDIO FIRE", {}, juce::MidiMessage::noteOff (1, 54 + 48).withTimeStamp (now + 0.6));
 
                         check (during > 0.01f && during > before * 10.0f,
                                "Fire pad plays Vital through the instrument channel (peak " + juce::String (during, 3)
@@ -1103,7 +1113,7 @@ namespace FxSelfTest
 
                         // The MidiMix must never play notes.
                         play (200);
-                        channel.handleMidi ("MIDI Mix", juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110).withTimeStamp (now + 5.0));
+                        channel.handleMidi ("MIDI Mix", {}, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110).withTimeStamp (now + 5.0));
                         const float mixer = play (30);
                         check (mixer < 0.01f, "MidiMix notes are ignored by instruments (peak " + juce::String (mixer, 4) + ")");
 
@@ -1112,9 +1122,9 @@ namespace FxSelfTest
                         {
                             channel.getFx().setSettings (fx);
                             play (400);   // let everything die away
-                            channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOn (1, 54 + 48, (juce::uint8) 110).withTimeStamp (at));
+                            channel.handleMidi ("FL STUDIO FIRE", {}, juce::MidiMessage::noteOn (1, 54 + 48, (juce::uint8) 110).withTimeStamp (at));
                             play (10);
-                            channel.handleMidi ("FL STUDIO FIRE", juce::MidiMessage::noteOff (1, 54 + 48).withTimeStamp (at + 0.05));
+                            channel.handleMidi ("FL STUDIO FIRE", {}, juce::MidiMessage::noteOff (1, 54 + 48).withTimeStamp (at + 0.05));
                             play (100);   // past Vital's own release
                             return play (60);
                         };
@@ -1219,6 +1229,108 @@ namespace FxSelfTest
             check (vital == "Flume Pad" && zyklop == "SPACE OF HERE" && xmlName == "Glass Pad" && none.isEmpty(),
                    "Preset names found in saved settings: \"" + vital + "\" (Vital), \"" + zyklop + "\" (Zyklop), \""
                        + xmlName + "\" (XML)");
+        }
+
+        // ---- Fire light show: a 1 kHz tone lights the middle of the spectrum; every pattern drawn ----
+        {
+            FireVisualizer viz;
+            viz.prepare (48000.0);
+            std::vector<float> tone (1600);
+            int written = 0;
+            auto feedSignal = [&] (std::function<float (int)> signal)
+            {
+                for (auto& v : tone)
+                    v = signal (written++);
+                viz.push (tone.data(), tone.data(), (int) tone.size());
+            };
+            const float twoPi = juce::MathConstants<float>::twoPi;
+
+            for (int frame = 0; frame < 30; ++frame)
+            {
+                feedSignal ([&] (int n) { return 0.3f * std::sin ((float) n * twoPi * 1000.0f / 48000.0f); });
+                viz.update (0.0, false);
+            }
+            int loudest = 0;
+            for (int c = 1; c < FireVisualizer::columns; ++c)
+                if (viz.bandLevel (c) > viz.bandLevel (loudest))
+                    loudest = c;
+            const auto tonePads = viz.render (FireVisualizer::spectrum, 0);
+            check ((loudest == 8 || loudest == 9) && viz.bandLevel (0) < 0.3f && tonePads[(size_t) (3 * 16 + loudest)].getBrightness() > 0.5f,
+                   "Fire light show: a 1 kHz tone peaks in column " + juce::String (loudest + 1) + " of 16 (lows "
+                       + juce::String (viz.bandLevel (0), 2) + ")");
+
+            // Something like music: a low drone, a melody and a pulse, beats ticking past.
+            double beats = 0.0;
+            for (int frame = 0; frame < 45; ++frame)
+            {
+                const float pulse = frame % 8 < 2 ? 1.0f : 0.3f;
+                const float note = 400.0f + 200.0f * (float) ((frame / 6) % 4);
+                feedSignal ([&] (int n) { const float t = (float) n / 48000.0f;
+                                    return 0.25f * std::sin (t * twoPi * 70.0f) + 0.15f * pulse * std::sin (t * twoPi * note)
+                                         + 0.05f * pulse * std::sin (t * twoPi * 5000.0f); });
+                beats += 0.25;
+                viz.update (beats, true);
+            }
+            check (viz.numBursts() > 0, "Fire light show: beats set off bursts (" + juce::String (viz.numBursts()) + " showing)");
+
+            // Every pattern in Ambient, then the six palettes on Plasma - to look at.
+            const int cell = 14, gap = 8, patternH = 4 * cell + gap;
+            const int total = FireVisualizer::numPatterns + FireVisualizer::numPalettes;
+            juce::Image image (juce::Image::RGB, 16 * cell + 140, total * patternH, true);
+            {
+                juce::Graphics g (image);   // drawing finishes when this goes
+                g.fillAll (juce::Colours::black);
+                for (int k = 0; k < total; ++k)
+                {
+                    const bool pattern = k < FireVisualizer::numPatterns;
+                    const auto pads = pattern ? viz.render (k, 0) : viz.render (FireVisualizer::plasma, k - FireVisualizer::numPatterns);
+                    for (int p = 0; p < 64; ++p)
+                    {
+                        g.setColour (pads[(size_t) p]);
+                        g.fillRect ((p % 16) * cell, k * patternH + (p / 16) * cell, cell - 2, cell - 2);
+                    }
+                    g.setColour (juce::Colours::white);
+                    g.setFont (12.0f);
+                    g.drawText (pattern ? FireVisualizer::patternName (k) : "Plasma / " + FireVisualizer::paletteName (k - FireVisualizer::numPatterns),
+                                16 * cell + 6, k * patternH, 134, 4 * cell, juce::Justification::centredLeft);
+                }
+            }
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-firelights.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            juce::PNGImageFormat().writeImageToStream (image, out);
+
+            // Two Fires joined: side by side (32 x 4) and stacked (16 x 8), a gap where the Fires meet.
+            const int patternsToShow[] = { FireVisualizer::spectrum, FireVisualizer::waves, FireVisualizer::kaleidoscope,
+                                           FireVisualizer::diamonds, FireVisualizer::plasma };
+            const int jcell = 12;
+            juce::Image joined (juce::Image::RGB, 32 * jcell + 20 + 16 * jcell + 20, 5 * (8 * jcell + 26), true);
+            bool sizesRight = true;
+            {
+                juce::Graphics g (joined);
+                g.fillAll (juce::Colours::black);
+                for (int k = 0; k < 5; ++k)
+                {
+                    const auto wide = viz.render (patternsToShow[k], 0, 32, 4);
+                    const auto tall = viz.render (patternsToShow[k], 0, 16, 8);
+                    sizesRight = sizesRight && wide.size() == 128 && tall.size() == 128;
+                    const int y0 = k * (8 * jcell + 26);
+                    for (int p = 0; p < 128; ++p)
+                    {
+                        const int wc = p % 32, wr = p / 32;
+                        g.setColour (wide[(size_t) p]);
+                        g.fillRect (wc * jcell + (wc >= 16 ? 8 : 0), y0 + 2 * jcell + wr * jcell, jcell - 2, jcell - 2);
+                        const int tc = p % 16, tr = p / 16;
+                        g.setColour (tall[(size_t) p]);
+                        g.fillRect (32 * jcell + 28 + tc * jcell, y0 + tr * jcell + (tr >= 4 ? 8 : 0), jcell - 2, jcell - 2);
+                    }
+                }
+            }
+            const auto joinedFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-firelights-joined.png");
+            joinedFile.deleteFile();
+            juce::FileOutputStream joinedOut (joinedFile);
+            juce::PNGImageFormat().writeImageToStream (joined, joinedOut);
+            check (sizesRight, "Fire light show draws across two Fires joined (32 x 4 and 16 x 8)");
         }
 
         // ---- Stage view: drawn with a sample set, saved as a picture to look at ----
