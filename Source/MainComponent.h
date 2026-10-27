@@ -33,6 +33,9 @@ public:
     MainComponent();
     ~MainComponent() override;
 
+    // Shown when the window opens: e.g. that the last run ended unexpectedly (see CrashLog).
+    static inline juce::String startupWarning;
+
     void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override;
     void releaseResources() override;

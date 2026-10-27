@@ -43,6 +43,13 @@ target_compile_definitions(LiveRig PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LiveRig,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LiveRig,JUCE_VERSION>")
 
+# Release builds keep debug symbols (Airloom.pdb, beside the program) so a crash dump from
+# CrashLog can be read. The .pdb stays with the build; it isn't packaged.
+if(MSVC)
+    target_compile_options(LiveRig PRIVATE $<$<CONFIG:Release>:/Zi>)
+    target_link_options(LiveRig PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OPT:ICF>)
+endif()
+
 target_link_libraries(LiveRig
     PRIVATE
         AirloomData

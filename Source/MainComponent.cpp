@@ -391,6 +391,8 @@ MainComponent::MainComponent()
     addChildComponent (countInOverlay);
     startedMs = juce::Time::getMillisecondCounter();
     setStageMode (settings.getUserSettings()->getBoolValue ("stageMode", false));
+    if (startupWarning.isNotEmpty())
+        errorMessage = startupWarning;
 
     startTimerHz (30);
 }

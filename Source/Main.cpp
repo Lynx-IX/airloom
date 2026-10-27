@@ -3,6 +3,7 @@
 #include "PresetProbe.h"
 #include "MainComponent.h"
 #include "Theme.h"
+#include "CrashLog.h"   // last: it brings in windows.h
 
 class LiveRigApplication : public juce::JUCEApplication
 {
@@ -11,7 +12,8 @@ public:
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     // One copy at a time, except the self-test, which can run beside it.
     bool moreThanOneInstanceAllowed() override          { return getCommandLineParameters().contains ("--fx-selftest")
-                                                                      || getCommandLineParameters().contains ("--preset-probe"); }
+                                                                      || getCommandLineParameters().contains ("--preset-probe")
+                                                                      || getCommandLineParameters().contains ("--crash-test"); }
 
     void initialise (const juce::String& commandLine) override
     {
@@ -33,6 +35,19 @@ public:
             return;
         }
 
+        // Development: checks the crash log by crashing (writes a dump and a log line, no running marker).
+        if (commandLine.contains ("--crash-test"))
+        {
+            juce::SystemStats::setApplicationCrashHandler (CrashLog::onCrash);
+            CrashLog::writeLine ("crash test starting");
+            volatile int* nowhere = nullptr;
+            *nowhere = 1;
+        }
+
+        CrashLog::start();
+        MainComponent::startupWarning = CrashLog::previousRunProblem();
+        running = true;
+
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         mainWindow = std::make_unique<MainWindow> (getApplicationName() + " - Audio Performance Rig");
     }
@@ -41,7 +56,11 @@ public:
     {
         mainWindow = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+        if (running)
+            CrashLog::stop();   // a proper quit: no "closed unexpectedly" next time
     }
+
+    bool running = false;   // the app proper (not a self-test) is running
 
     void systemRequestedQuit() override { quit(); }
 

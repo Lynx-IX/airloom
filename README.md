@@ -407,6 +407,13 @@ so nothing jumps. On group and master faders an amber tick shows where the hardw
 
 Right-click any learnable control to clear its assignment, or to clear all MIDI assignments.
 
+## If Airloom closes unexpectedly
+
+Airloom keeps a crash log in `%APPDATA%\LiveRig`: a crash writes `crash-log.txt` (what failed, and where) and a
+minidump in `Crashes\`. If it closed any other way without quitting, the next start says so in the status line. Keep
+those files to find the cause - the dump is read against `Airloom.pdb`, which the build writes beside Airloom.exe
+(not packaged). `Airloom.exe --crash-test` checks the log by crashing on purpose.
+
 ## Low latency (ASIO)
 
 The build uses WASAPI/DirectSound. For the lowest latency with an interface's ASIO driver (needed for live
