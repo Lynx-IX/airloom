@@ -3,70 +3,12 @@
 void InputChannel::prepare (double newSampleRate, int maxBlockSize)
 {
     sampleRate = newSampleRate;
-    blockSize = juce::jmax (32, maxBlockSize);
 
     fx.prepare (sampleRate, maxBlockSize);
     scratch.setSize (2, juce::jmax (4096, maxBlockSize));
     gain.reset (sampleRate, 0.05);
     gain.setCurrentAndTargetValue (muted ? 0.0f : targetGain.load());
-
-    const juce::SpinLock::ScopedLockType sl (insertLock);
-    if (insert != nullptr)
-    {
-        insert->prepareToPlay (sampleRate, blockSize);
-        insertBuffer.setSize (juce::jmax (2, insert->getTotalNumInputChannels(), insert->getTotalNumOutputChannels()), blockSize);
-    }
-}
-
-std::unique_ptr<juce::AudioPluginInstance> InputChannel::setInsert (std::unique_ptr<juce::AudioPluginInstance> plugin)
-{
-    // Prepare the newcomer and its buffer first, so the audio thread never waits long.
-    juce::AudioBuffer<float> newBuffer;
-    if (plugin != nullptr)
-    {
-        plugin->enableAllBuses();
-        plugin->setNonRealtime (false);
-        plugin->prepareToPlay (sampleRate, blockSize);
-        newBuffer.setSize (juce::jmax (2, plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels()), blockSize);
-    }
-
-    {
-        const juce::SpinLock::ScopedLockType sl (insertLock);
-        std::swap (insert, plugin);
-        std::swap (insertBuffer, newBuffer);
-    }
-
-    if (plugin != nullptr)
-        plugin->releaseResources();
-    return plugin;   // the previous one, freed by the caller off the audio thread
-}
-
-void InputChannel::processInsert (int numSamples)
-{
-    const juce::SpinLock::ScopedTryLockType sl (insertLock);
-    if (! sl.isLocked() || insert == nullptr)
-        return;
-
-    const int channels = insertBuffer.getNumChannels();
-    const bool stereoOut = insert->getTotalNumOutputChannels() > 1;
-
-    for (int done = 0; done < numSamples;)
-    {
-        const int n = juce::jmin (numSamples - done, blockSize);
-
-        // A view onto the preallocated buffer at this chunk's length: no allocation.
-        juce::AudioBuffer<float> view (insertBuffer.getArrayOfWritePointers(), channels, n);
-        view.clear();
-        view.copyFrom (0, 0, scratch, 0, done, n);
-        view.copyFrom (1, 0, scratch, 1, done, n);
-
-        noMidi.clear();
-        insert->processBlock (view, noMidi);
-
-        scratch.copyFrom (0, done, view, 0, 0, n);
-        scratch.copyFrom (1, done, view, stereoOut ? 1 : 0, 0, n);
-        done += n;
-    }
+    insert.prepare (sampleRate, maxBlockSize);
 }
 
 void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
@@ -112,7 +54,7 @@ void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
     // The plug-in (e.g. pitch correction) comes first, then the built-in chain.
     if (hear || (record && wet))
     {
-        processInsert (numSamples);
+        insert.process (scratch, 0, numSamples);
 
         if (fx.isActive())
             fx.process (scratch, 0, numSamples);
@@ -130,7 +72,13 @@ void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
     for (int i = 0; i < numSamples; ++i)
     {
         const float g = gain.getNextValue();
-        for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)
-            out.addSample (ch, startSample + i, scratch.getSample (ch, i) * g);
+        for (int ch = 0; ch < 2; ++ch)
+            scratch.setSample (ch, i, scratch.getSample (ch, i) * g);
     }
+
+    // To the speakers, and (after the fader) to the shared Space reverb.
+    for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)
+        out.addFrom (ch, startSample, scratch, ch, 0, numSamples);
+    for (int ch = 0; ch < 2; ++ch)
+        SpaceReverb::addToBus (ch, 0, scratch.getReadPointer (ch), numSamples, fx.getSpaceSend());
 }

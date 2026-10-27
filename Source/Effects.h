@@ -15,6 +15,18 @@ inline constexpr DelayDivision delayDivisions[] = {
 };
 inline constexpr int numDelayDivisions = (int) std::size (delayDivisions);
 
+// The intervals the octave effect can add.
+struct ShiftInterval
+{
+    const char* name;
+    float semitones;
+};
+
+inline constexpr ShiftInterval shiftIntervals[] = {
+    { "Octave down", -12.0f }, { "Octave up", 12.0f }, { "Fifth up", 7.0f }, { "Fifth down", -7.0f }, { "Two octaves down", -24.0f },
+};
+inline constexpr int numShiftIntervals = (int) std::size (shiftIntervals);
+
 // Safety limiter for the master output. Below the ceiling it does nothing; above it
 // the level comes down at once and recovers over 150 ms, so nothing ever hard-clips
 // the speakers. Non-finite samples (a plug-in gone wrong) are silenced.
@@ -66,6 +78,11 @@ struct FxSettings
 {
     double gainDb = 0.0;            // channel gain before everything else
     double pan = 0.0;               // -1 left .. +1 right
+    double spaceSend = 0.0;         // 0..1 sent to the shared Space reverb, after the fader
+
+    bool swellOn = false;           // fades each note in, like a volume pedal
+    double swellAttackMs = 600.0;
+    double swellThresholdDb = -45.0;
 
     bool gateOn = false;
     double gateThresholdDb = -50.0;
@@ -78,6 +95,22 @@ struct FxSettings
 
     bool compOn = false;
     double compThresholdDb = -18.0, compRatio = 3.0, compReleaseMs = 150.0, compMakeupDb = 0.0;
+
+    bool tapeOn = false;            // saturation, wow and flutter, rolled-off highs
+    double tapeDrive = 0.3, tapeWow = 0.25, tapeTone = 0.5;
+
+    bool filterOn = false;          // a resonant sweep, optionally moving by itself
+    bool filterHighPass = false;
+    double filterCutoffHz = 2000.0, filterResonance = 0.2;
+    double filterLfoRate = 0.0;     // Hz; 0 = still
+    double filterLfoDepth = 1.0;    // octaves either side
+
+    bool octaveOn = false;          // adds a pitch-shifted copy
+    int octaveInterval = 0;         // index into shiftIntervals
+    double octaveMix = 0.4;
+
+    bool chorusOn = false;
+    double chorusRate = 0.4, chorusDepth = 0.35, chorusMix = 0.4;
 
     bool delayOn = false;
     bool delaySync = true;
@@ -95,15 +128,58 @@ struct FxSettings
     double reverbPredelayMs = 20.0;
     double reverbMod = 0.3;
     double reverbMix = 0.3;
+    double reverbShimmer = 0.0;     // 0..1: the tail rises an octave as it fades
+    double reverbDry = 1.0;         // how much of the original stays under the reverb (0 = only reverb)
+
+    bool motionOn = false;          // stereo width and a slow auto-pan
+    double motionWidth = 1.0;       // 0 mono .. 1 as is .. 2 extra wide
+    double motionPanRate = 0.1;     // Hz
+    double motionPanDepth = 0.5;
 
     bool hasTail() const    { return delayOn || reverbOn; }
-    bool anyOn() const      { return gateOn || lowCutOn || eqOn || compOn || delayOn || reverbOn; }
-    bool isActive() const   { return anyOn() || gainDb != 0.0 || pan != 0.0; }
+    bool anyOn() const
+    {
+        return gateOn || swellOn || lowCutOn || eqOn || compOn || tapeOn || filterOn || octaveOn || chorusOn
+            || delayOn || reverbOn || motionOn;
+    }
+    bool isActive() const   { return anyOn() || gainDb != 0.0 || pan != 0.0 || spaceSend > 0.0; }
 
     double delayTimeMs (double bpm) const;
 
     void addToXml (juce::XmlElement& parent) const;
     static FxSettings fromXml (const juce::XmlElement* fx, const FxSettings& defaults = {});
+
+    // A knob's setting by its saved name ("reverbMix"), for MIDI control. Null if there's no such knob.
+    double* findParameter (const juce::String& name);
+};
+
+// Every effect knob: its saved name, range and centre (for a skewed knob), so the
+// panel and MIDI control agree on what a knob covers.
+struct FxParameter
+{
+    const char* name;
+    const char* label;
+    double FxSettings::* member;
+    double min, max, step, skewMidPoint;
+    bool FxSettings::* section;     // the switch it turns on when moved (null: always on)
+};
+
+const FxParameter* findFxParameter (const juce::String& name);
+
+// The pitch shifter in the octave effect and the shimmer: two read heads sweep through
+// a short delay line at the new speed, crossfading so neither's jump back is heard.
+class PitchShifter
+{
+public:
+    void prepare (double sampleRate, float windowMs);
+    void reset();
+    void setSemitones (float semitones)   { ratio = std::pow (2.0f, semitones / 12.0f); }
+    float process (float input);
+
+private:
+    std::vector<float> buffer;
+    int write = 0;
+    float window = 1000.0f, phase = 0.0f, ratio = 1.0f;
 };
 
 // A lush stereo reverb for long ambient tails: pre-delay, input diffusion,
@@ -115,8 +191,12 @@ public:
     void reset();
     void setParameters (float decaySeconds, float size, float damping, float predelayMs, float modulation);
 
-    // Processes in place, blending the reverb under the dry signal by 'mix'.
-    void process (float* left, float* right, int numSamples, float mix);
+    // 0..1: feeds the tail back an octave up, so it rises into a shimmer as it fades.
+    void setShimmer (float amount)   { shimmer = juce::jlimit (0.0f, 1.0f, amount); }
+
+    // Processes in place, blending the reverb under the dry signal by 'mix'; 'dry' turns
+    // the original down on top of that (0 leaves only the reverb).
+    void process (float* left, float* right, int numSamples, float mix, float dry = 1.0f);
 
     // One (mono) sample in, the stereo tail out.
     void tick (float input, float& wetL, float& wetR);
@@ -156,6 +236,38 @@ private:
     float currentDecay = -1.0f, currentSize = -1.0f;
     bool frozen = false;
     float freezeAmount = 0.0f, freezeStep = 0.0f;
+
+    PitchShifter shimmerShifter;
+    float shimmer = 0.0f, shimmerLast = 0.0f, shimmerLowCut = 0.0f, shimmerLowCutCoeff = 0.0f;
+};
+
+// The shared reverb, "Space": any channel can send some of itself to it (after its fader),
+// so everything sits in one room. Sources add their sends to the bus as they mix; then
+// it's played through one big reverb into the master.
+//
+// Thread model: setSettings() from the message thread; everything else on the audio thread.
+class SpaceReverb
+{
+public:
+    // The sends for this block: sample 0 is the block's first sample.
+    static inline juce::AudioBuffer<float> bus;
+    static void addToBus (int channel, int offset, const float* source, int numSamples, float gain);
+
+    void prepare (double sampleRate, int maxBlockSize);
+    void setSettings (const FxSettings& settings);
+
+    // Adds the reverb of what was sent into 'out', then clears the bus for the next block.
+    void process (juce::AudioBuffer<float>& out, int startSample, int numSamples);
+
+    // The Space defaults: a big, slow room that sits behind everything.
+    static FxSettings defaults();
+
+private:
+    AmbientReverb reverb;
+    juce::SpinLock settingsLock;
+    FxSettings pending, current;
+    std::atomic<bool> changed { true };
+    juce::SmoothedValue<float> returnGain;
 };
 
 // FREEZE: holds what was just played as an endless pad to play over. A reverb
@@ -185,21 +297,25 @@ private:
     std::atomic<bool> sounding { false };
 };
 
-// Gain -> gate -> low cut -> EQ -> compressor -> delay -> reverb -> pan,
-// processed in place on a stereo buffer.
+// Gain -> gate -> swell -> low cut -> EQ -> compressor -> tape -> filter -> octave ->
+// chorus -> delay -> reverb -> motion -> pan, processed in place on a stereo buffer.
 //
 // Thread model: setSettings() is called from the message thread, prepare()
 // and process() from the audio thread.
 class FxChain
 {
 public:
-    // The set's tempo, shared by every synced delay.
+    // The set's tempo, shared by every synced delay, and its time signature: BPM counts
+    // beats of 1/beatUnit (a quarter in 4/4, an eighth in 6/8).
     static inline std::atomic<double> tempoBpm { 72.0 };
+    static inline std::atomic<int> beatsPerBar { 4 }, beatUnit { 4 };
 
     void prepare (double sampleRate, int maxBlockSize);
     void setSettings (const FxSettings& settings);
 
     bool isActive() const   { return active; }
+    // How much this channel sends to the shared Space reverb (0..1).
+    float getSpaceSend() const   { return spaceSend; }
     // True while delay or reverb is on: callers keep processing silence so tails ring out.
     bool needsTail() const  { return tail; }
 
@@ -226,11 +342,17 @@ private:
 
     void updateFilters();
     void processDelay (float* left, float* right, int numSamples);
+    void processSwell (float* left, float* right, int numSamples);
+    void processTape (float* left, float* right, int numSamples);
+    void processFilter (float* left, float* right, int numSamples);
+    void processOctave (float* left, float* right, int numSamples);
+    void processMotion (float* left, float* right, int numSamples);
 
     // Settings handed over from the message thread.
     juce::SpinLock settingsLock;
     FxSettings pending;
     std::atomic<bool> settingsChanged { false }, active { false }, tail { false };
+    std::atomic<float> spaceSend { 0.0f };
 
     // Audio thread only.
     FxSettings current, filtersBuiltFor;
@@ -250,4 +372,25 @@ private:
     bool delayWasOn = false, reverbWasOn = false;
 
     AmbientReverb reverb;
+
+    float swellEnvelope = 0.0f, swellGain = 0.0f;
+
+    std::vector<float> tapeLine;     // stereo, interleaved: the wow and flutter delay
+    int tapeWrite = 0;
+    double tapeWowPhase = 0.0, tapeFlutterPhase = 0.0;
+    std::array<float, 2> tapeToneState {};
+    bool tapeWasOn = false;
+
+    juce::dsp::StateVariableTPTFilter<float> filter;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> filterCutoff;
+    double filterLfoPhase = 0.0;
+    bool filterWasOn = false, filterWasHighPass = false;
+
+    PitchShifter octaveShifter;
+    bool octaveWasOn = false;
+
+    juce::dsp::Chorus<float> chorus;
+    bool chorusWasOn = false;
+
+    double motionPhase = 0.0;
 };

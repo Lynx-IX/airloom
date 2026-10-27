@@ -12,7 +12,7 @@
 class ChannelCard : public juce::Component
 {
 public:
-    enum class State { empty, idle, loading, fadingIn, playing };
+    enum class State { empty, idle, loading, fadingIn, playing, cuedStart, cuedStop };
 
     static constexpr const char* dragPrefix = "channel:";
 
@@ -63,8 +63,12 @@ public:
     void setContent (const juce::String& newLabel, bool isOneShot, bool isSmoothed, bool isReversed, bool hasFx,
                      State newState, double volumeDb, juce::Colour colour)
     {
+        // Cued channels blink, about twice a second, until their beat comes.
+        const bool cued = newState == State::cuedStart || newState == State::cuedStop;
+        const bool blink = cued && (juce::Time::getMillisecondCounter() / 250) % 2 == 0;
         const bool changed = newLabel != label || isOneShot != oneShot || isSmoothed != smoothed || isReversed != reversed
-                          || newState != state || colour != rowColour;
+                          || newState != state || colour != rowColour || blink != blinkOn;
+        blinkOn = blink;
         label = newLabel;
         oneShot = isOneShot;
         smoothed = isSmoothed;
@@ -86,11 +90,17 @@ public:
         if (! volume.isMouseButtonDown() && std::abs (volume.getValue() - volumeDb) > 0.05)
             volume.setValue (volumeDb, juce::dontSendNotification);
 
-        const bool lit = state == State::playing || state == State::fadingIn;
-        playButton.setButtonText (oneShot ? "PLAY" : state == State::loading ? "..." : lit ? "STOP" : "PLAY");
+        // Cued to start: blinks amber. Cued to stop: blinks between its colour and off.
+        const bool lit = state == State::playing || state == State::fadingIn
+                      || (state == State::cuedStart && blinkOn) || (state == State::cuedStop && blinkOn);
+        playButton.setButtonText (oneShot ? "PLAY" : state == State::loading ? "..." : cued ? "CUED" : lit ? "STOP" : "PLAY");
         playButton.setColour (juce::TextButton::buttonColourId,
-                              state == State::playing ? rowColour : state == State::fadingIn ? Theme::warn : Theme::raised);
+                              ! lit ? Theme::raised
+                                    : state == State::fadingIn || state == State::cuedStart ? Theme::warn : rowColour);
         playButton.setColour (juce::TextButton::textColourOffId, lit ? Theme::background : Theme::text);
+        playButton.setTooltip (state == State::cuedStart ? "Waiting for the next beat or bar to come in (press to cancel)"
+                             : state == State::cuedStop  ? "Stops on the next beat or bar"
+                                                         : juce::String());
 
         if (changed)
         {
@@ -119,8 +129,8 @@ public:
             return;
         }
 
-        const bool lit = state == State::playing;
-        const bool pending = state == State::fadingIn || state == State::loading;
+        const bool lit = state == State::playing || state == State::cuedStop;
+        const bool pending = state == State::fadingIn || state == State::loading || state == State::cuedStart;
         const auto edge = lit ? rowColour : pending ? Theme::warn : juce::Colour();
 
         Theme::drawSurface (g, r, Theme::raised.interpolatedWith (rowColour, lit ? 0.16f : 0.035f), 6.0f);
@@ -206,6 +216,7 @@ public:
 private:
     juce::String label;
     bool oneShot = false, smoothed = false, reversed = false, midiAssigned = false;
+    bool blinkOn = false;   // the current half of a cued channel's blink
     State state = State::empty;
     juce::Colour rowColour = Theme::accent;
     juce::Rectangle<int> nameArea;
@@ -272,7 +283,8 @@ public:
     juce::Component* getCard (int slot)   { return juce::isPositiveAndBelow (slot, cards.size()) ? cards[slot] : nullptr; }
     ChannelCard* getChannelCard (int slot) { return juce::isPositiveAndBelow (slot, cards.size()) ? cards[slot] : nullptr; }
 
-    void update (const LiveSet::Row& row, const std::function<bool (int slotId)>& isFadingIn, juce::uint32 now)
+    void update (const LiveSet::Row& row, const std::function<bool (int slotId)>& isFadingIn,
+                 const std::function<ChannelCard::State (int slotId)>& cueState, juce::uint32 now)
     {
         const auto newColour = Theme::rowColour (row.colour);
         fixedColumns = row.columns > 0;
@@ -313,8 +325,10 @@ public:
             const auto& slot = row.slots[(size_t) i];
             using State = ChannelCard::State;
 
+            const State cue = slot.file == juce::File() || slot.loading ? State::idle : cueState (slot.id);
             const State state = slot.file == juce::File() ? State::empty
                               : slot.loading              ? State::loading
+                              : cue != State::idle        ? cue
                               : slot.playing              ? (isFadingIn (slot.id) ? State::fadingIn : State::playing)
                               : slot.flashUntil > now     ? State::playing
                                                           : State::idle;

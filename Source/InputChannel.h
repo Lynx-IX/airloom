@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "Effects.h"
+#include "PluginInsert.h"
 
 // A live input from the audio interface (mic or instrument): picks the input
 // channel(s), runs the effects, and adds the result to the output when
@@ -34,21 +35,18 @@ public:
 
     // A hosted effect plug-in (e.g. pitch correction) that runs first, before the built-in
     // effects. Installs it (prepared here for the current device) and returns the old one.
-    std::unique_ptr<juce::AudioPluginInstance> setInsert (std::unique_ptr<juce::AudioPluginInstance> plugin);
-    juce::AudioPluginInstance* getInsert() const   { return insert.get(); }
+    std::unique_ptr<juce::AudioPluginInstance> setInsert (std::unique_ptr<juce::AudioPluginInstance> plugin)
+    {
+        return insert.setPlugin (std::move (plugin));
+    }
+    juce::AudioPluginInstance* getInsert() const   { return insert.getPlugin(); }
 
     // Input level (before effects and fader) since the last call, for the meter.
     std::pair<float, float> takePeaks()  { return { peakL.exchange (0.0f), peakR.exchange (0.0f) }; }
 
 private:
-    void processInsert (int numSamples);
-
-    std::unique_ptr<juce::AudioPluginInstance> insert;   // swapped under insertLock
-    juce::SpinLock insertLock;
-    juce::AudioBuffer<float> insertBuffer;               // swapped under insertLock
-    juce::MidiBuffer noMidi;
+    PluginInsert insert;
     double sampleRate = 48000.0;
-    int blockSize = 512;
 
     FxChain fx;
     juce::AudioBuffer<float> scratch;     // audio thread only

@@ -3,17 +3,32 @@
 #include <JuceHeader.h>
 #include "Theme.h"
 
-// Four lights, one per beat of a 4/4 bar, pulsing in time: the current beat
-// lights up and fades through the beat; beat 1 is brighter. Red while recording.
-class BeatIndicator : public juce::Component
+// One light per beat of the bar, pulsing in time: the current beat lights up and
+// fades through the beat; beat 1 is brighter. Red while recording. The time signature
+// sits beside them; clicking opens onClick (to change it).
+class BeatIndicator : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    BeatIndicator()     { setInterceptsMouseClicks (false, false); }
+    std::function<void()> onClick;
+
+    BeatIndicator()     { setTooltip ("Beat lights. Click to change the time signature."); }
+
+    void setTimeSignature (int beats, int unit)
+    {
+        if (beats != beatsPerBar || unit != beatUnit)
+        {
+            beatsPerBar = juce::jmax (1, beats);
+            beatUnit = unit;
+            repaint();
+        }
+    }
+
+    void mouseUp (const juce::MouseEvent&) override   { if (onClick) onClick(); }
 
     // 'beats' counts from beat 1 of some bar (fractions are part-way through a beat).
     void setPosition (double beats, bool recording)
     {
-        const int beat = (int) std::floor (beats) % 4;
+        const int beat = (int) std::floor (beats) % beatsPerBar;
         const float through = (float) (beats - std::floor (beats));
         const float level = juce::jlimit (0.25f, 1.0f, 1.0f - through * 0.75f);   // bright on the beat, then fades
 
@@ -28,12 +43,19 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        const auto area = getLocalBounds().toFloat();
-        const float size = juce::jmin (area.getHeight(), (area.getWidth() - 3.0f * gap) / 4.0f);
-        const float startX = area.getCentreX() - (4.0f * size + 3.0f * gap) / 2.0f;
+        auto area = getLocalBounds().toFloat();
+        g.setColour (Theme::textDim);
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawText (juce::String (beatsPerBar) + "/" + juce::String (beatUnit), area.removeFromLeft (30.0f),
+                    juce::Justification::centredLeft);
+
+        const int n = beatsPerBar;
+        const float gap = n > 5 ? 3.0f : 6.0f;
+        const float size = juce::jmin (area.getHeight(), (area.getWidth() - (float) (n - 1) * gap) / (float) n);
+        const float startX = area.getCentreX() - ((float) n * size + (float) (n - 1) * gap) / 2.0f;
         const auto on = isRecording ? Theme::danger : Theme::accent;
 
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < n; ++i)
         {
             auto dot = juce::Rectangle<float> (startX + (float) i * (size + gap), area.getCentreY() - size / 2.0f, size, size);
 
@@ -56,7 +78,7 @@ public:
     }
 
 private:
-    static constexpr float gap = 6.0f;
+    int beatsPerBar = 4, beatUnit = 4;
     int currentBeat = -1;
     float currentLevel = 0.0f;
     bool isRecording = false;

@@ -121,7 +121,15 @@ public:
     void setMuted (bool shouldMute)   { muted = shouldMute; }
     void setArmed (bool shouldArm)    { armed = shouldArm; }
     void setRecordWithFx (bool wet)   { recordWithFx = wet; }
-    void setMidiSource (const juce::String& deviceNameFragment);
+    // The one MIDI device that plays it (its full name), or empty for every keyboard and Fire.
+    void setMidiSource (const juce::String& deviceName);
+
+    // True if notes from this device play an instrument set to 'source'. Exact names, since
+    // Windows calls a second Fire "2 - FL STUDIO FIRE", which contains the first one's name.
+    static bool playsFrom (const juce::String& source, const juce::String& deviceName)
+    {
+        return source.isEmpty() || deviceName.trim().equalsIgnoreCase (source.trim());
+    }
     void setLayout (const PadLayout& newLayout);
     FxChain& getFx()                  { return fx; }
 
@@ -139,8 +147,9 @@ private:
         juce::Optional<PositionInfo> getPosition() const override
         {
             PositionInfo info;
-            info.setBpm (FxChain::tempoBpm.load());
-            info.setTimeSignature (TimeSignature { 4, 4 });
+            // Plug-ins count quarter notes, so an eighth-note BPM (6/8) is halved for them.
+            info.setBpm (FxChain::tempoBpm.load() * 4.0 / FxChain::beatUnit.load());
+            info.setTimeSignature (TimeSignature { FxChain::beatsPerBar.load(), FxChain::beatUnit.load() });
             info.setIsPlaying (false);
             return info;
         }

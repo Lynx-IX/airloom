@@ -10,6 +10,9 @@ namespace
         { "gateOn", &FxSettings::gateOn }, { "lowCutOn", &FxSettings::lowCutOn }, { "eqOn", &FxSettings::eqOn },
         { "compOn", &FxSettings::compOn }, { "delayOn", &FxSettings::delayOn }, { "delaySync", &FxSettings::delaySync },
         { "delayPingPong", &FxSettings::delayPingPong }, { "reverbOn", &FxSettings::reverbOn },
+        { "swellOn", &FxSettings::swellOn }, { "tapeOn", &FxSettings::tapeOn }, { "filterOn", &FxSettings::filterOn },
+        { "filterHighPass", &FxSettings::filterHighPass }, { "octaveOn", &FxSettings::octaveOn },
+        { "chorusOn", &FxSettings::chorusOn }, { "motionOn", &FxSettings::motionOn },
     };
 
     const Field<double> doubleFields[] = {
@@ -23,6 +26,61 @@ namespace
         { "reverbDecay", &FxSettings::reverbDecay }, { "reverbSize", &FxSettings::reverbSize },
         { "reverbDamping", &FxSettings::reverbDamping }, { "reverbPredelayMs", &FxSettings::reverbPredelayMs },
         { "reverbMod", &FxSettings::reverbMod }, { "reverbMix", &FxSettings::reverbMix },
+        { "spaceSend", &FxSettings::spaceSend }, { "swellAttackMs", &FxSettings::swellAttackMs },
+        { "swellThresholdDb", &FxSettings::swellThresholdDb }, { "tapeDrive", &FxSettings::tapeDrive },
+        { "tapeWow", &FxSettings::tapeWow }, { "tapeTone", &FxSettings::tapeTone },
+        { "filterCutoffHz", &FxSettings::filterCutoffHz }, { "filterResonance", &FxSettings::filterResonance },
+        { "filterLfoRate", &FxSettings::filterLfoRate }, { "filterLfoDepth", &FxSettings::filterLfoDepth },
+        { "octaveMix", &FxSettings::octaveMix }, { "chorusRate", &FxSettings::chorusRate },
+        { "chorusDepth", &FxSettings::chorusDepth }, { "chorusMix", &FxSettings::chorusMix },
+        { "reverbShimmer", &FxSettings::reverbShimmer }, { "reverbDry", &FxSettings::reverbDry },
+        { "motionWidth", &FxSettings::motionWidth },
+        { "motionPanRate", &FxSettings::motionPanRate }, { "motionPanDepth", &FxSettings::motionPanDepth },
+    };
+
+    using F = FxSettings;
+    const FxParameter parameters[] = {
+        { "gainDb", "Gain", &F::gainDb, -24.0, 24.0, 0.1, 0.0, nullptr },
+        { "pan", "Pan", &F::pan, -1.0, 1.0, 0.01, 0.0, nullptr },
+        { "spaceSend", "Space", &F::spaceSend, 0.0, 1.0, 0.01, 0.0, nullptr },
+        { "gateThresholdDb", "Threshold", &F::gateThresholdDb, -80.0, -10.0, 0.5, 0.0, &F::gateOn },
+        { "swellAttackMs", "Attack", &F::swellAttackMs, 50.0, 3000.0, 1.0, 600.0, &F::swellOn },
+        { "swellThresholdDb", "Threshold", &F::swellThresholdDb, -70.0, -20.0, 0.5, 0.0, &F::swellOn },
+        { "lowCutHz", "Freq", &F::lowCutHz, 20.0, 400.0, 1.0, 100.0, &F::lowCutOn },
+        { "eqLowDb", "Low", &F::eqLowDb, -15.0, 15.0, 0.1, 0.0, &F::eqOn },
+        { "eqMidDb", "Mid", &F::eqMidDb, -15.0, 15.0, 0.1, 0.0, &F::eqOn },
+        { "eqMidHz", "Mid freq", &F::eqMidHz, 200.0, 6000.0, 1.0, 1000.0, &F::eqOn },
+        { "eqHighDb", "High", &F::eqHighDb, -15.0, 15.0, 0.1, 0.0, &F::eqOn },
+        { "compThresholdDb", "Threshold", &F::compThresholdDb, -50.0, 0.0, 0.5, 0.0, &F::compOn },
+        { "compRatio", "Ratio", &F::compRatio, 1.0, 10.0, 0.1, 3.0, &F::compOn },
+        { "compReleaseMs", "Release", &F::compReleaseMs, 20.0, 1000.0, 1.0, 150.0, &F::compOn },
+        { "compMakeupDb", "Makeup", &F::compMakeupDb, 0.0, 18.0, 0.1, 0.0, &F::compOn },
+        { "tapeDrive", "Drive", &F::tapeDrive, 0.0, 1.0, 0.01, 0.0, &F::tapeOn },
+        { "tapeWow", "Wow", &F::tapeWow, 0.0, 1.0, 0.01, 0.0, &F::tapeOn },
+        { "tapeTone", "Tone", &F::tapeTone, 0.0, 1.0, 0.01, 0.0, &F::tapeOn },
+        { "filterCutoffHz", "Cutoff", &F::filterCutoffHz, 40.0, 18000.0, 1.0, 1200.0, &F::filterOn },
+        { "filterResonance", "Resonance", &F::filterResonance, 0.0, 1.0, 0.01, 0.0, &F::filterOn },
+        { "filterLfoRate", "Sweep rate", &F::filterLfoRate, 0.0, 2.0, 0.01, 0.3, &F::filterOn },
+        { "filterLfoDepth", "Sweep depth", &F::filterLfoDepth, 0.0, 3.0, 0.01, 0.0, &F::filterOn },
+        { "octaveMix", "Mix", &F::octaveMix, 0.0, 1.0, 0.01, 0.0, &F::octaveOn },
+        { "chorusRate", "Rate", &F::chorusRate, 0.05, 3.0, 0.01, 0.6, &F::chorusOn },
+        { "chorusDepth", "Depth", &F::chorusDepth, 0.0, 1.0, 0.01, 0.0, &F::chorusOn },
+        { "chorusMix", "Mix", &F::chorusMix, 0.0, 1.0, 0.01, 0.0, &F::chorusOn },
+        { "delayMs", "Time", &F::delayMs, 30.0, 2000.0, 1.0, 400.0, &F::delayOn },
+        { "delayFeedback", "Feedback", &F::delayFeedback, 0.0, 0.9, 0.01, 0.0, &F::delayOn },
+        { "delayTone", "Tone", &F::delayTone, 0.0, 1.0, 0.01, 0.0, &F::delayOn },
+        { "delayMix", "Mix", &F::delayMix, 0.0, 1.0, 0.01, 0.0, &F::delayOn },
+        { "reverbDecay", "Decay", &F::reverbDecay, 0.5, 20.0, 0.1, 4.0, &F::reverbOn },
+        { "reverbSize", "Size", &F::reverbSize, 0.0, 1.0, 0.01, 0.0, &F::reverbOn },
+        { "reverbDamping", "Tone", &F::reverbDamping, 0.0, 1.0, 0.01, 0.0, &F::reverbOn },
+        { "reverbPredelayMs", "Pre-delay", &F::reverbPredelayMs, 0.0, 200.0, 1.0, 0.0, &F::reverbOn },
+        { "reverbMod", "Movement", &F::reverbMod, 0.0, 1.0, 0.01, 0.0, &F::reverbOn },
+        { "reverbShimmer", "Shimmer", &F::reverbShimmer, 0.0, 1.0, 0.01, 0.0, &F::reverbOn },
+        { "reverbMix", "Mix", &F::reverbMix, 0.0, 1.0, 0.01, 0.0, &F::reverbOn },
+        { "reverbDry", "Dry", &F::reverbDry, 0.0, 1.0, 0.01, 0.0, &F::reverbOn },
+        { "motionWidth", "Width", &F::motionWidth, 0.0, 2.0, 0.01, 0.0, &F::motionOn },
+        { "motionPanRate", "Pan rate", &F::motionPanRate, 0.01, 1.0, 0.01, 0.15, &F::motionOn },
+        { "motionPanDepth", "Pan depth", &F::motionPanDepth, 0.0, 1.0, 0.01, 0.0, &F::motionOn },
     };
 
     float onePoleCoeff (float cutoffHz, double sampleRate)
@@ -31,13 +89,31 @@ namespace
     }
 }
 
+const FxParameter* findFxParameter (const juce::String& name)
+{
+    for (auto& p : parameters)
+        if (name == p.name)
+            return &p;
+    return nullptr;
+}
+
+double* FxSettings::findParameter (const juce::String& name)
+{
+    if (auto* p = findFxParameter (name))
+        return &(this->*(p->member));
+    return nullptr;
+}
+
 double FxSettings::delayTimeMs (double bpm) const
 {
     if (! delaySync)
         return delayMs;
 
-    const auto& division = delayDivisions[(size_t) juce::jlimit (0, numDelayDivisions - 1, delayDivision)];
-    return 60000.0 / juce::jlimit (20.0, 300.0, bpm) * division.beats;
+    // Divisions are in quarter notes; "1 bar" is however long the set's bar is.
+    const int index = juce::jlimit (0, numDelayDivisions - 1, delayDivision);
+    const double beats = index == numDelayDivisions - 1 ? (double) FxChain::beatsPerBar.load()
+                                                        : delayDivisions[(size_t) index].beats * FxChain::beatUnit.load() / 4.0;
+    return 60000.0 / juce::jlimit (20.0, 300.0, bpm) * beats;
 }
 
 void FxSettings::addToXml (juce::XmlElement& parent) const
@@ -46,6 +122,7 @@ void FxSettings::addToXml (juce::XmlElement& parent) const
     for (auto& f : boolFields)   e->setAttribute (f.name, this->*f.member);
     for (auto& f : doubleFields) e->setAttribute (f.name, this->*f.member);
     e->setAttribute ("delayDivision", delayDivision);
+    e->setAttribute ("octaveInterval", octaveInterval);
 }
 
 FxSettings FxSettings::fromXml (const juce::XmlElement* e, const FxSettings& defaults)
@@ -57,7 +134,54 @@ FxSettings FxSettings::fromXml (const juce::XmlElement* e, const FxSettings& def
     for (auto& f : boolFields)   s.*f.member = e->getBoolAttribute (f.name, defaults.*f.member);
     for (auto& f : doubleFields) s.*f.member = e->getDoubleAttribute (f.name, defaults.*f.member);
     s.delayDivision = juce::jlimit (0, numDelayDivisions - 1, e->getIntAttribute ("delayDivision", defaults.delayDivision));
+    s.octaveInterval = juce::jlimit (0, numShiftIntervals - 1, e->getIntAttribute ("octaveInterval", defaults.octaveInterval));
     return s;
+}
+
+//==============================================================================
+void PitchShifter::prepare (double sampleRate, float windowMs)
+{
+    window = juce::jmax (8.0f, windowMs * 0.001f * (float) sampleRate);
+    buffer.assign ((size_t) window * 2 + 8, 0.0f);
+    reset();
+}
+
+void PitchShifter::reset()
+{
+    std::fill (buffer.begin(), buffer.end(), 0.0f);
+    write = 0;
+    phase = 0.0f;
+}
+
+float PitchShifter::process (float input)
+{
+    const int size = (int) buffer.size();
+    buffer[(size_t) write] = input;
+
+    // The delay grows (lower) or shrinks (higher) by (1 - ratio) samples per sample,
+    // wrapping round the window; the second head is half a window behind.
+    phase += (1.0f - ratio) / window;
+    phase -= std::floor (phase);
+
+    auto read = [&] (float p)
+    {
+        float pos = (float) write - (2.0f + p * window);
+        if (pos < 0.0f)
+            pos += (float) size;
+        const int i0 = (int) pos;
+        const int i1 = (i0 + 1) % size;
+        const float frac = pos - (float) i0;
+        return buffer[(size_t) i0] + frac * (buffer[(size_t) i1] - buffer[(size_t) i0]);
+    };
+
+    const float p2 = phase + 0.5f - std::floor (phase + 0.5f);
+    // Each head fades out as it nears its jump (sin windows, equal power between the two).
+    const float out = read (phase) * std::sin (juce::MathConstants<float>::pi * phase)
+                    + read (p2) * std::sin (juce::MathConstants<float>::pi * p2);
+
+    if (++write >= size)
+        write = 0;
+    return out;
 }
 
 //==============================================================================
@@ -85,6 +209,10 @@ void AmbientReverb::prepare (double newSampleRate)
     currentDecay = currentSize = -1.0f;
     freezeStep = 1.0f / (0.05f * (float) sampleRate);
     freezeAmount = 0.0f;
+
+    shimmerShifter.prepare (sampleRate, 90.0f);
+    shimmerShifter.setSemitones (12.0f);
+    shimmerLowCutCoeff = onePoleCoeff (400.0f, sampleRate);
     reset();
 }
 
@@ -94,6 +222,8 @@ void AmbientReverb::reset()
     for (auto& d : diffusers) std::fill (d.buffer.begin(), d.buffer.end(), 0.0f);
     std::fill (predelay.begin(), predelay.end(), 0.0f);
     damp.fill (0.0f);
+    shimmerShifter.reset();
+    shimmerLast = shimmerLowCut = 0.0f;
 }
 
 void AmbientReverb::setParameters (float decaySeconds, float size, float damping, float predelayMs, float modulation)
@@ -123,9 +253,9 @@ void AmbientReverb::setParameters (float decaySeconds, float size, float damping
     predelaySamples = juce::jlimit (0, (int) predelay.size() - 1, (int) (predelayMs * 0.001f * (float) sampleRate));
 }
 
-void AmbientReverb::process (float* left, float* right, int numSamples, float mix)
+void AmbientReverb::process (float* left, float* right, int numSamples, float mix, float dry)
 {
-    const float dryGain = 1.0f - 0.5f * mix;
+    const float dryGain = (1.0f - 0.5f * mix) * juce::jlimit (0.0f, 1.0f, dry);
     const float wetGain = mix * 0.6f;
 
     for (int n = 0; n < numSamples; ++n)
@@ -139,6 +269,15 @@ void AmbientReverb::process (float* left, float* right, int numSamples, float mi
 
 void AmbientReverb::tick (float input, float& wetL, float& wetR)
 {
+    // Shimmer: the tail, an octave up and without its lows, goes round again. Soft-clipped
+    // and kept well under unity so it rises and fades rather than building up for ever.
+    if (shimmer > 0.0f)
+    {
+        shimmerLowCut += shimmerLowCutCoeff * (shimmerLast - shimmerLowCut);
+        const float up = shimmerShifter.process (shimmerLast - shimmerLowCut);
+        input += std::tanh (up * shimmer * 0.9f) * 0.5f;
+    }
+
     // Pre-delay, then diffusion.
     const int predelaySize = (int) predelay.size();
     predelay[(size_t) predelayWrite] = input;
@@ -205,6 +344,89 @@ void AmbientReverb::tick (float input, float& wetL, float& wetR)
 
     wetL = out[0] - out[2] + out[4] - out[6];
     wetR = out[1] - out[3] + out[5] - out[7];
+    shimmerLast = 0.25f * (wetL + wetR);
+}
+
+//==============================================================================
+void SpaceReverb::addToBus (int channel, int offset, const float* source, int numSamples, float gain)
+{
+    if (gain <= 0.0f || channel >= bus.getNumChannels() || offset < 0)
+        return;
+
+    const int n = juce::jmin (numSamples, bus.getNumSamples() - offset);
+    if (n > 0)
+        bus.addFrom (channel, offset, source, n, gain);
+}
+
+FxSettings SpaceReverb::defaults()
+{
+    FxSettings s;
+    s.reverbOn = true;
+    s.reverbDecay = 9.0;
+    s.reverbSize = 0.9;
+    s.reverbDamping = 0.45;
+    s.reverbPredelayMs = 40.0;
+    s.reverbMod = 0.45;
+    s.reverbShimmer = 0.0;
+    s.reverbMix = 0.7;   // the return level
+    return s;
+}
+
+void SpaceReverb::prepare (double sampleRate, int maxBlockSize)
+{
+    bus.setSize (2, juce::jmax (4096, maxBlockSize));
+    bus.clear();
+    reverb.prepare (sampleRate);
+    returnGain.reset (sampleRate, 0.05);
+    changed = true;
+}
+
+void SpaceReverb::setSettings (const FxSettings& settings)
+{
+    {
+        const juce::SpinLock::ScopedLockType sl (settingsLock);
+        pending = settings;
+    }
+    changed = true;
+}
+
+void SpaceReverb::process (juce::AudioBuffer<float>& out, int startSample, int numSamples)
+{
+    juce::ScopedNoDenormals noDenormals;
+
+    if (changed)
+    {
+        const juce::SpinLock::ScopedTryLockType sl (settingsLock);
+        if (sl.isLocked())
+        {
+            current = pending;
+            changed = false;
+            reverb.setParameters ((float) current.reverbDecay, (float) current.reverbSize, (float) current.reverbDamping,
+                                  (float) current.reverbPredelayMs, (float) current.reverbMod);
+            reverb.setShimmer ((float) current.reverbShimmer);
+        }
+    }
+
+    const int n = juce::jmin (numSamples, bus.getNumSamples());
+    if (n <= 0 || out.getNumChannels() < 2 || bus.getNumChannels() < 2)
+        return;
+
+    returnGain.setTargetValue (current.reverbOn ? (float) current.reverbMix * 0.6f : 0.0f);
+    const float* sendL = bus.getReadPointer (0);
+    const float* sendR = bus.getReadPointer (1);
+    float* left = out.getWritePointer (0, startSample);
+    float* right = out.getWritePointer (1, startSample);
+
+    for (int i = 0; i < n; ++i)
+    {
+        float wetL, wetR;
+        reverb.tick (0.5f * (sendL[i] + sendR[i]), wetL, wetR);
+        const float g = returnGain.getNextValue();
+        left[i] += wetL * g;
+        right[i] += wetR * g;
+    }
+
+    bus.clear (0, n);
 }
 
 //==============================================================================
@@ -295,6 +517,23 @@ void FxChain::prepare (double newSampleRate, int maxBlockSize)
 
     reverb.prepare (sampleRate);
 
+    swellEnvelope = swellGain = 0.0f;
+
+    tapeLine.assign ((size_t) (sampleRate * 0.03) * 2 + 8, 0.0f);   // up to 30 ms, stereo interleaved
+    tapeWrite = 0;
+    tapeToneState.fill (0.0f);
+
+    filter.prepare (spec);
+    filter.reset();
+    filterCutoff.reset (sampleRate, 0.05);
+    filterCutoff.setCurrentAndTargetValue (2000.0f);
+
+    octaveShifter.prepare (sampleRate, 60.0f);
+
+    chorus.prepare (spec);
+    chorus.setCentreDelay (12.0f);
+    chorus.setFeedback (0.1f);
+
     // Start from the latest settings without ramps.
     settingsChanged = true;
     process (delayBuffer, 0, 0);
@@ -314,6 +553,7 @@ void FxChain::setSettings (const FxSettings& settings)
     settingsChanged = true;
     active = settings.isActive();
     tail = settings.hasTail();
+    spaceSend = (float) juce::jlimit (0.0, 1.0, settings.spaceSend);
 }
 
 void FxChain::updateFilters()
@@ -402,6 +642,143 @@ void FxChain::processDelay (float* left, float* right, int numSamples)
     }
 }
 
+void FxChain::processSwell (float* left, float* right, int numSamples)
+{
+    // A note starting from silence fades in over the attack time; a gap below the
+    // threshold (between notes) closes it again, ready for the next.
+    const float threshold = juce::Decibels::decibelsToGain ((float) current.swellThresholdDb);
+    const float rise = 1.0f / (juce::jmax (10.0f, (float) current.swellAttackMs) * 0.001f * (float) sampleRate);
+    const float fall = 1.0f / (0.12f * (float) sampleRate);
+    const float envRelease = std::exp (-1.0f / (0.05f * (float) sampleRate));
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float level = juce::jmax (std::abs (left[i]), std::abs (right[i]));
+        swellEnvelope = level > swellEnvelope ? level : level + (swellEnvelope - level) * envRelease;
+        swellGain = swellEnvelope > threshold ? juce::jmin (1.0f, swellGain + rise) : juce::jmax (0.0f, swellGain - fall);
+
+        const float g = swellGain * swellGain;   // a slow start, like a bow
+        left[i] *= g;
+        right[i] *= g;
+    }
+}
+
+void FxChain::processTape (float* left, float* right, int numSamples)
+{
+    // Saturation ceiling: high with no drive (only peaks round off), lower as it's driven.
+    const float ceiling = 1.2f * std::pow (0.25f, (float) current.tapeDrive);
+    const float wow = (float) current.tapeWow;
+    const int size = (int) tapeLine.size() / 2;
+    const float baseDelay = 0.012f * (float) sampleRate;
+    const float wowDepth = wow * 0.0035f * (float) sampleRate, flutterDepth = wow * 0.0004f * (float) sampleRate;
+    const double wowStep = juce::MathConstants<double>::twoPi * 0.55 / sampleRate;
+    const double flutterStep = juce::MathConstants<double>::twoPi * 6.5 / sampleRate;
+    const float toneCoeff = onePoleCoeff (2500.0f * std::pow (7.0f, (float) current.tapeTone), sampleRate);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Saturation: unchanged when quiet, rounding off towards the ceiling as it gets loud.
+        float l = ceiling * std::tanh (left[i] / ceiling);
+        float r = ceiling * std::tanh (right[i] / ceiling);
+
+        // Wow and flutter: a slowly wandering delay bends the pitch a little.
+        tapeLine[(size_t) tapeWrite * 2] = l;
+        tapeLine[(size_t) tapeWrite * 2 + 1] = r;
+        const float delay = baseDelay + wowDepth * (float) std::sin (tapeWowPhase) + flutterDepth * (float) std::sin (tapeFlutterPhase);
+        tapeWowPhase += wowStep;
+        tapeFlutterPhase += flutterStep;
+        if (tapeWowPhase > juce::MathConstants<double>::twoPi) tapeWowPhase -= juce::MathConstants<double>::twoPi;
+        if (tapeFlutterPhase > juce::MathConstants<double>::twoPi) tapeFlutterPhase -= juce::MathConstants<double>::twoPi;
+
+        float pos = (float) tapeWrite - delay;
+        if (pos < 0.0f)
+            pos += (float) size;
+        const int p0 = (int) pos, p1 = (p0 + 1) % size;
+        const float frac = pos - (float) p0;
+        l = tapeLine[(size_t) p0 * 2] + frac * (tapeLine[(size_t) p1 * 2] - tapeLine[(size_t) p0 * 2]);
+        r = tapeLine[(size_t) p0 * 2 + 1] + frac * (tapeLine[(size_t) p1 * 2 + 1] - tapeLine[(size_t) p0 * 2 + 1]);
+        if (++tapeWrite >= size)
+            tapeWrite = 0;
+
+        // Worn highs.
+        tapeToneState[0] += toneCoeff * (l - tapeToneState[0]);
+        tapeToneState[1] += toneCoeff * (r - tapeToneState[1]);
+        left[i] = tapeToneState[0];
+        right[i] = tapeToneState[1];
+    }
+}
+
+void FxChain::processFilter (float* left, float* right, int numSamples)
+{
+    if (current.filterHighPass != filterWasHighPass || ! filterWasOn)
+    {
+        filter.setType (current.filterHighPass ? juce::dsp::StateVariableTPTFilterType::highpass
+                                               : juce::dsp::StateVariableTPTFilterType::lowpass);
+        filterWasHighPass = current.filterHighPass;
+    }
+
+    // Q 0.7 .. 4.2, and the level comes down as it rises so the resonant peak doesn't jump out.
+    const float q = 0.707f * std::pow (6.0f, (float) current.filterResonance);
+    filter.setResonance (q);
+    const float level = std::pow (q / 0.707f, -0.4f);
+    filterCutoff.setTargetValue ((float) juce::jlimit (20.0, 20000.0, current.filterCutoffHz));
+    const double lfoStep = juce::MathConstants<double>::twoPi * current.filterLfoRate / sampleRate;
+    const float depth = current.filterLfoRate > 0.0 ? (float) current.filterLfoDepth : 0.0f;
+    const float top = (float) sampleRate * 0.45f;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float base = filterCutoff.getNextValue();
+
+        // The sweep moves the cutoff up to 'depth' octaves either side; recalculated every 16 samples.
+        if ((i & 15) == 0)
+            filter.setCutoffFrequency (juce::jlimit (20.0f, top, base * std::pow (2.0f, depth * (float) std::sin (filterLfoPhase))));
+        filterLfoPhase += lfoStep;
+        if (filterLfoPhase > juce::MathConstants<double>::twoPi)
+            filterLfoPhase -= juce::MathConstants<double>::twoPi;
+
+        left[i] = filter.processSample (0, left[i]) * level;
+        right[i] = filter.processSample (1, right[i]) * level;
+    }
+}
+
+void FxChain::processOctave (float* left, float* right, int numSamples)
+{
+    octaveShifter.setSemitones (shiftIntervals[(size_t) juce::jlimit (0, numShiftIntervals - 1, current.octaveInterval)].semitones);
+    const float mix = (float) current.octaveMix;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float shifted = octaveShifter.process (0.5f * (left[i] + right[i])) * mix;
+        left[i] += shifted;
+        right[i] += shifted;
+    }
+}
+
+void FxChain::processMotion (float* left, float* right, int numSamples)
+{
+    const float width = (float) current.motionWidth;
+    const float depth = (float) current.motionPanDepth;
+    const double step = juce::MathConstants<double>::twoPi * current.motionPanRate / sampleRate;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Width: scale the difference between the sides (mid/side).
+        const float mid = 0.5f * (left[i] + right[i]);
+        const float side = 0.5f * (left[i] - right[i]) * width;
+        float l = mid + side, r = mid - side;
+
+        // Auto-pan: a slow constant-power drift from side to side.
+        const float angle = (1.0f + depth * (float) std::sin (motionPhase)) * juce::MathConstants<float>::pi * 0.25f;
+        motionPhase += step;
+        if (motionPhase > juce::MathConstants<double>::twoPi)
+            motionPhase -= juce::MathConstants<double>::twoPi;
+
+        left[i] = l * std::cos (angle) * juce::MathConstants<float>::sqrt2;
+        right[i] = r * std::sin (angle) * juce::MathConstants<float>::sqrt2;
+    }
+}
+
 void FxChain::process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -441,6 +818,11 @@ void FxChain::process (juce::AudioBuffer<float>& buffer, int startSample, int nu
         gate.process (context);
     }
 
+    if (s.swellOn)
+        processSwell (left, right, numSamples);
+    else
+        swellGain = 1.0f;   // switched on mid-note, it starts open rather than cutting out
+
     if (! filtersValid || s.lowCutHz != filtersBuiltFor.lowCutHz || s.eqLowDb != filtersBuiltFor.eqLowDb
         || s.eqMidDb != filtersBuiltFor.eqMidDb || s.eqMidHz != filtersBuiltFor.eqMidHz || s.eqHighDb != filtersBuiltFor.eqHighDb)
         updateFilters();
@@ -475,6 +857,44 @@ void FxChain::process (juce::AudioBuffer<float>& buffer, int startSample, int nu
         }
     }
 
+    if (s.tapeOn)
+    {
+        if (! tapeWasOn)
+            std::fill (tapeLine.begin(), tapeLine.end(), 0.0f);
+        processTape (left, right, numSamples);
+    }
+    tapeWasOn = s.tapeOn;
+
+    if (s.filterOn)
+    {
+        if (! filterWasOn)
+        {
+            filter.reset();
+            filterCutoff.setCurrentAndTargetValue ((float) juce::jlimit (20.0, 20000.0, s.filterCutoffHz));
+        }
+        processFilter (left, right, numSamples);
+    }
+    filterWasOn = s.filterOn;
+
+    if (s.octaveOn)
+    {
+        if (! octaveWasOn)
+            octaveShifter.reset();
+        processOctave (left, right, numSamples);
+    }
+    octaveWasOn = s.octaveOn;
+
+    if (s.chorusOn)
+    {
+        if (! chorusWasOn)
+            chorus.reset();
+        chorus.setRate ((float) s.chorusRate);
+        chorus.setDepth ((float) s.chorusDepth);
+        chorus.setMix ((float) s.chorusMix);
+        chorus.process (context);
+    }
+    chorusWasOn = s.chorusOn;
+
     if (s.delayOn)
     {
         if (! delayWasOn)
@@ -493,9 +913,13 @@ void FxChain::process (juce::AudioBuffer<float>& buffer, int startSample, int nu
             reverb.reset();
         reverb.setParameters ((float) s.reverbDecay, (float) s.reverbSize, (float) s.reverbDamping,
                               (float) s.reverbPredelayMs, (float) s.reverbMod);
-        reverb.process (left, right, numSamples, (float) s.reverbMix);
+        reverb.setShimmer ((float) s.reverbShimmer);
+        reverb.process (left, right, numSamples, (float) s.reverbMix, (float) s.reverbDry);
     }
     reverbWasOn = s.reverbOn;
+
+    if (s.motionOn)
+        processMotion (left, right, numSamples);
 
     // Constant-power pan: centre leaves both sides untouched.
     pan.setTargetValue ((float) s.pan);

@@ -2,6 +2,7 @@
 
 #include "Effects.h"
 #include "LoopPlayer.h"
+#include "PluginInsert.h"
 
 // The audio for one row. Every channel in the row that's sounding gets its own
 // voice with its own volume; loops repeat, one-shots stop by themselves.
@@ -35,6 +36,10 @@ public:
     void realignLoop (int owner, juce::int64 anchor);
     bool isFadingIn (int owner) const;
 
+    // A loop pressed with Start on beat or bar waits for its moment: to come in, or to stop.
+    enum class Cue { none, start, stop };
+    Cue cueFor (int owner) const;
+
     void triggerShot (int owner, LoopClipPtr clip, float gain);
 
     // Changes the volume of everything the owner is playing.
@@ -51,6 +56,9 @@ public:
 
     // The row's effects, applied to everything in it before the row fader.
     FxChain& getFx()   { return fx; }
+
+    // An effect plug-in on the whole row, after its built-in effects.
+    PluginInsert& getInsert()   { return insert; }
 
     // Peak levels since the last call, for the meters.
     std::pair<float, float> takePeaks()  { return { peakL.exchange (0.0f), peakR.exchange (0.0f) }; }
@@ -70,7 +78,8 @@ private:
     std::array<juce::AudioBuffer<float>, numChannelFx> channelFxBuffers;   // audio thread only
 
     FxChain fx;
-    juce::AudioBuffer<float> scratch;            // audio thread only
+    PluginInsert insert;
+    juce::AudioBuffer<float> scratch, sendScratch;   // audio thread only
     juce::SmoothedValue<float> gain;
     std::atomic<float> targetGain { 1.0f };
     std::atomic<bool> muted { false };

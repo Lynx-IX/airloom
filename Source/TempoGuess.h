@@ -47,15 +47,15 @@ namespace TempoGuess
         double bpm;
     };
 
-    // Tempos that fit a loop of this length exactly, assuming it's a whole number of 4/4 bars.
-    inline std::vector<Option> fromLength (double seconds, double minBpm = 50.0, double maxBpm = 200.0)
+    // Tempos that fit a loop of this length exactly, as a whole number of bars of 'beatsPerBar'.
+    inline std::vector<Option> fromLength (double seconds, int beatsPerBar = 4, double minBpm = 50.0, double maxBpm = 200.0)
     {
         std::vector<Option> options;
         if (seconds <= 0.0)
             return options;
 
         for (int bars : { 1, 2, 3, 4, 6, 8, 12, 16, 32 })
-            if (const double bpm = 240.0 * bars / seconds; bpm >= minBpm && bpm <= maxBpm)
+            if (const double bpm = 60.0 * beatsPerBar * bars / seconds; bpm >= minBpm && bpm <= maxBpm)
                 options.push_back ({ bars, bpm });
 
         return options;
@@ -63,11 +63,11 @@ namespace TempoGuess
 
     // Of the tempos a loop of this length fits, the one nearest 'currentBpm' (by ratio,
     // so 72 is as near 144 as it is 36). An empty option (0 bars) if none fits.
-    inline Option nearest (double seconds, double currentBpm)
+    inline Option nearest (double seconds, double currentBpm, int beatsPerBar = 4)
     {
         Option best { 0, 0.0 };
         double bestDistance = 1.0e9;
-        for (const auto& o : fromLength (seconds))
+        for (const auto& o : fromLength (seconds, beatsPerBar))
             if (const double d = std::abs (std::log (o.bpm / currentBpm)); d < bestDistance)
             {
                 bestDistance = d;

@@ -13,8 +13,11 @@
 #include "Looper.h"
 #include "MidiMap.h"
 #include "RowView.h"
+#include "SceneBar.h"
+#include "StageView.h"
 #include "SamplePool.h"
 #include "SetRecorder.h"
+#include "StageStatus.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::FileDragAndDropTarget,
@@ -53,6 +56,66 @@ private:
     void openAudioDevice();
     void showDeviceSettings();
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
+
+    // Watching the interface: if it's unplugged (or stops answering) Airloom closes the audio
+    // rather than falling back to the computer's own speakers and mic, shows a red banner, and
+    // reopens it with the same settings as soon as it's back.
+    void watchAudioDevice();
+    bool deviceAvailable (const juce::String& type, const juce::String& name);
+    juce::String lastDeviceName, lastDeviceType;   // the interface that was last working
+    juce::AudioDeviceManager::AudioDeviceSetup lastSetup;
+    juce::String lostDeviceName;                   // set while waiting for it to come back
+    juce::uint32 lastRecoveryTry = 0;
+    std::atomic<juce::uint32> lastCallbackMs { 0 };   // when the audio thread last ran
+
+    // CPU and dropouts in the header.
+    PerformanceMeter perfMeter;
+    int dropoutBase = 0, lastDropouts = 0;
+    juce::uint32 lastDropoutMs = 0, startedMs = 0;
+    void updatePerfMeter();
+    AlertBanner alertBanner;
+    CountInOverlay countInOverlay;
+    void updateCountIn();
+
+    // MUTE OUT: an instant, hard silence on the outputs (not a fade); everything keeps running.
+    RightClickable<juce::TextButton> muteButton { "MUTE OUT" };
+    std::atomic<bool> outputMuted { false };
+    juce::SmoothedValue<float> muteGain;   // audio thread: 5 ms, just enough not to click
+    void toggleMute();
+    void updateMuteButton();
+
+    // Stage view: the set drawn big for performing (STAGE in the header, F11, or a MIDI button).
+    StageView stageView;
+    RightClickable<juce::TextButton> stageButton { "STAGE" };
+    bool stageMode = false;
+    juce::Rectangle<int> stageArea;
+    void setStageMode (bool on);
+    void updateStageView();
+
+    // Scenes: saved mixes, recalled with a morph (see LiveSet::Scene).
+    SceneBar sceneBar;
+    int activeScene = -1;                  // the one last recalled (index), or -1
+    // A level moving to the scene's: a channel's volume, or a group's, input's or instrument's
+    // fader and mute (what's heard glides from fromGain to toGain; 0 = muted).
+    struct SceneGlide
+    {
+        enum class Kind { channel, group, input, instrument } kind;
+        juce::String uid;        // channel or group
+        int index;               // group row, input or instrument
+        double fromDb, toDb;     // the fader
+        float fromGain, toGain;
+        bool endMuted;
+    };
+    std::vector<SceneGlide> sceneGlides;
+    double morphStartMs = 0.0, morphMs = 0.0;
+    LiveSet::Scene captureScene (const juce::String& name) const;
+    void addScene();
+    void recallScene (int index);
+    void stepScene (int delta);
+    void updateMorph();
+    void showSceneMenu (int index);
+    void showSceneBarMenu();
+    void updateSceneBar();
 
     // Sets
     void showSetMenu();
@@ -102,8 +165,28 @@ private:
     void removeInputPlugin (int input);
     void openInputPluginEditor (int input);
     juce::Array<juce::PluginDescription> effectTypes() const;
+    // 'owner' says whose effects these are, for MIDI on the knobs: "in.<i>", "inst.<i>",
+    // "grp.<uid>", "ch.<uid>" or "space".
     void showFxPanel (juce::Component& anchor, const juce::String& title, const FxSettings& fx, juce::Colour colour,
-                      std::function<void (const FxSettings&)> onChange);
+                      std::function<void (const FxSettings&)> onChange, const juce::String& owner,
+                      FxPanel::Kind kind = FxPanel::Kind::channel);
+    juce::Component::SafePointer<FxPanel> openFxPanel;   // the effects panel showing, if any
+    juce::String openFxOwner;
+
+    // Changes an owner's effects (from a MIDI knob) and puts the change into effect.
+    // False if that owner doesn't exist any more.
+    bool changeFx (const juce::String& owner, const std::function<void (FxSettings&)>& change);
+
+    // The shared Space reverb, and effect plug-ins on groups ("grp.<uid>") and the master ("master").
+    void showSpacePanel();
+    PluginInsert* insertFor (const juce::String& key);
+    LiveSet::PluginSlot* insertSlotFor (const juce::String& key);
+    juce::String insertTitle (const juce::String& key);
+    void showInsertMenu (const juce::String& key, juce::Component& target);
+    void loadInsertPlugin (const juce::String& key, const juce::PluginDescription& description, const juce::String& state);
+    void removeInsertPlugin (const juce::String& key);
+    void openInsertEditor (const juce::String& key);
+    void updateMasterButtons();
 
     // Hosted instruments
     void updateSourceStrips();
@@ -122,7 +205,8 @@ private:
     bool findSlotByUid (const juce::String& uid, int& row, int& slot) const;
     void applyFaderMidi (const juce::String& target, juce::Slider& fader, float proportion,
                          const std::function<void (float)>& showHardwarePosition = {});
-    bool currentKey (PadLayout& key) const;
+    // The key of the first instrument a Fire plays ('fireName' = that Fire; empty = any Fire).
+    bool currentKey (PadLayout& key, const juce::String& fireName = {}) const;
     juce::String nextLoopLabel (const Row& row) const;
     juce::Array<juce::PluginDescription> instrumentTypes() const;
     juce::String instrumentName (int index) const;
@@ -145,8 +229,9 @@ private:
     // Playing
     void playPressed (int row, int slot);
     void crossfadePressed (int row, int slot);
-    void startLoop (int row, int slot, bool fadeOutOthers);
-    void stopSlot (Row& row, Slot& slot, juce::int64 startAt = -1);
+    // 'seconds' is the fade; -1 = the fade time.
+    void startLoop (int row, int slot, bool fadeOutOthers, double seconds = -1.0);
+    void stopSlot (Row& row, Slot& slot, juce::int64 startAt = -1, double seconds = -1.0);
 
     // When a loop pressed now comes in: straight away, or on the next beat or bar of the
     // tempo grid (counted from the last TAP, SYNC or the first loop to start).
@@ -188,6 +273,10 @@ private:
     void timerCallback() override;
     void setZoom (float scale);
     void setBpm (double bpm);
+    void setTimeSignature (int beats, int unit);   // and save
+    void applyTimeSignature();                     // puts the set's into effect
+    void showTimeSignatureMenu();
+    double samplesPerBar() const;
     void tapTempo();
 
     juce::ApplicationProperties settings;
@@ -203,13 +292,20 @@ private:
     juce::AudioPluginFormatManager pluginFormats;   // declared before the instruments, so it outlives them
     juce::KnownPluginList knownPlugins;
     std::array<std::unique_ptr<InstrumentChannel>, LiveSet::maxInstruments> instrumentEngines;
+    SpaceReverb spaceReverb;
+    PluginInsert masterInsert;
+    std::map<juce::String, std::unique_ptr<juce::DocumentWindow>> insertWindows;
+    int insertGeneration = 0;                  // discards group and master plug-in loads meant for an earlier set
+    juce::TextButton spaceButton { "SPACE" }, masterFxButton { "FX" };
     std::array<std::unique_ptr<juce::DocumentWindow>, LiveSet::maxInstruments> editorWindows;
     std::array<std::unique_ptr<juce::DocumentWindow>, LiveSet::maxInputs> inputPluginWindows;
     std::array<bool, LiveSet::maxInstruments> instrumentLoading {};
     int instrumentGeneration = 0;              // discards plugin loads meant for an earlier set
     std::atomic<int> currentBlockSize { 512 };
     juce::uint32 lastStateCapture = 0;
-    std::unique_ptr<juce::MidiOutput> fireOutput;
+    // Every connected Fire, by name: each lights its pads in the key of the instrument it plays.
+    struct FireOutput { juce::String name; std::unique_ptr<juce::MidiOutput> output; };
+    std::vector<FireOutput> fireOutputs;
     juce::AudioBuffer<float> inputCapture;   // audio thread: the interface inputs for this block
     juce::AudioBuffer<float> recordBus;      // audio thread: armed inputs for the looper
     std::atomic<int> deviceInputs { 0 };

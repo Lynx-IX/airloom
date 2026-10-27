@@ -60,10 +60,10 @@ std::unique_ptr<juce::AudioPluginInstance> InstrumentChannel::setPlugin (std::un
     return newPlugin;   // the previous plugin; the caller frees it off the audio thread
 }
 
-void InstrumentChannel::setMidiSource (const juce::String& deviceNameFragment)
+void InstrumentChannel::setMidiSource (const juce::String& deviceName)
 {
     const juce::SpinLock::ScopedLockType sl (configLock);
-    midiSource = deviceNameFragment;
+    midiSource = deviceName;
 }
 
 void InstrumentChannel::setLayout (const PadLayout& newLayout)
@@ -86,7 +86,7 @@ void InstrumentChannel::handleMidi (const juce::String& deviceName, const juce::
         pads = layout;
     }
 
-    if (source.isNotEmpty() && ! deviceName.containsIgnoreCase (source))
+    if (! playsFrom (source, deviceName))
         return;
 
     if (deviceName.containsIgnoreCase ("FIRE"))
@@ -178,9 +178,15 @@ void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample,
         for (int i = 0; i < n; ++i)
         {
             const float g = gain.getNextValue();
-            for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)
-                out.addSample (ch, startSample + done + i, stereo.getSample (ch, i) * g);
+            for (int ch = 0; ch < 2; ++ch)
+                stereo.setSample (ch, i, stereo.getSample (ch, i) * g);
         }
+
+        // To the speakers, and (after the fader) to the shared Space reverb.
+        for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)
+            out.addFrom (ch, startSample + done, stereo, ch, 0, n);
+        for (int ch = 0; ch < 2; ++ch)
+            SpaceReverb::addToBus (ch, done, stereo.getReadPointer (ch), n, fx.getSpaceSend());
 
         done += n;
     }

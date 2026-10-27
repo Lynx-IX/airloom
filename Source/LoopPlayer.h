@@ -81,6 +81,9 @@ public:
     // Highest output level since the last call, for a channel meter.
     float takePeak()            { return peak.exchange (0.0f); }
     float getFadeTarget() const { return fadeTarget; }
+
+    // True while the last fade is held back for a later beat (fadeTo with 'at').
+    bool isWaiting() const      { return fadeStartAt.load() > blockClock.load(); }
     bool isAudible() const      { return fadeTarget > 0.0f || fadeLevel > 0.0f; }
 
     // Adds this loop's output into the buffer. Returns false if it was silent.

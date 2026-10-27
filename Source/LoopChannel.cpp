@@ -14,7 +14,9 @@ void LoopChannel::prepare (double sampleRate, int maxBlockSize)
 
     const int size = juce::jmax (512, maxBlockSize);
     fx.prepare (sampleRate, size);
+    insert.prepare (sampleRate, size);
     scratch.setSize (2, size);
+    sendScratch.setSize (2, size);
 
     for (size_t k = 0; k < channelFx.size(); ++k)
     {
@@ -49,6 +51,7 @@ void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int n
     {
         const int num = juce::jmin (numSamples - done, scratch.getNumSamples());
         scratch.clear (0, num);
+        sendScratch.clear (0, num);
         for (auto& b : channelFxBuffers)
             b.clear (0, num);
 
@@ -74,12 +77,16 @@ void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int n
 
             channelFx[k].process (channelFxBuffers[k], 0, num);
             for (int ch = 0; ch < 2; ++ch)
+            {
                 scratch.addFrom (ch, 0, channelFxBuffers[k], ch, 0, num);
+                sendScratch.addFrom (ch, 0, channelFxBuffers[k], ch, 0, num, channelFx[k].getSpaceSend());
+            }
             sounding = true;
         }
 
-        // With effects on, keep going through silence so reverb and delay tails ring out.
-        if (! sounding && ! fx.needsTail())
+        // With effects on, keep going through silence so reverb and delay tails ring out
+        // (a plug-in may have a tail of its own).
+        if (! sounding && ! fx.needsTail() && ! insert.isLoaded())
         {
             gain.skip (num);
             done += num;
@@ -88,16 +95,26 @@ void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int n
 
         if (fx.isActive())
             fx.process (scratch, 0, num);
+        insert.process (scratch, 0, num);
+
+        // The row's own send joins its channels'; the row fader and mute apply to both.
+        for (int ch = 0; ch < 2; ++ch)
+            sendScratch.addFrom (ch, 0, scratch, ch, 0, num, fx.getSpaceSend());
 
         for (int i = 0; i < num; ++i)
         {
             const float g = gain.getNextValue();
             for (int ch = 0; ch < scratch.getNumChannels(); ++ch)
+            {
                 scratch.setSample (ch, i, scratch.getSample (ch, i) * g);
+                sendScratch.setSample (ch, i, sendScratch.getSample (ch, i) * g);
+            }
         }
 
         for (int ch = 0; ch < outChannels; ++ch)
             out.addFrom (ch, startSample + done, scratch, ch, 0, num);
+        for (int ch = 0; ch < 2; ++ch)
+            SpaceReverb::addToBus (ch, done, sendScratch.getReadPointer (ch), num, 1.0f);
 
         pl = juce::jmax (pl, scratch.getMagnitude (0, 0, num));
         pr = juce::jmax (pr, scratch.getMagnitude (1, 0, num));
@@ -150,6 +167,21 @@ bool LoopChannel::isFadingIn (int owner) const
         if (loopOwners[i] == owner && loops[i].getFadeTarget() > 0.0f && loops[i].getFadeLevel() < 0.999f)
             return true;
     return false;
+}
+
+LoopChannel::Cue LoopChannel::cueFor (int owner) const
+{
+    for (size_t i = 0; i < loops.size(); ++i)
+    {
+        const auto& p = loops[i];
+        if (loopOwners[i] != owner || ! p.isWaiting())
+            continue;
+        if (p.getFadeTarget() > 0.0f)
+            return Cue::start;
+        if (p.getFadeLevel() > 0.0f)
+            return Cue::stop;
+    }
+    return Cue::none;
 }
 
 void LoopChannel::triggerShot (int owner, LoopClipPtr clip, float voiceGain)

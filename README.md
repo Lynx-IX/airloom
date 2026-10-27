@@ -147,6 +147,9 @@ Hosted instruments sit in the INPUTS section next to Mic and Instrument (up to 4
   in teal, the other scale notes dim. The Fire's buttons stay free for MIDI-learn (e.g. REC). The MidiMix never
   plays notes.
 - *Play from* (in its menu) limits an instrument to one controller, e.g. the Fire for a pad and the MPK for a lead.
+  With **two Fires** (Windows lists the second as "2 - FL STUDIO FIRE") set each instrument to its own Fire to split
+  them: each Fire then plays only its instrument and lights its pads in that instrument's key. An instrument left on
+  *All keyboards and the Fire* is played by both.
 - The plug-in and all its settings are saved with the set and reload when you open it. Instruments also receive the
   set's BPM, so their own synced delays and arpeggiators follow TAP.
 
@@ -207,11 +210,53 @@ interface input (**Mono input**), or two side by side as a **Stereo pair** (e.g.
 on the interface (up to 16), so there's nothing to switch on in Audio Settings. Through Windows Audio, an interface
 like the MOTU M Series or a Scarlett 2i2 shows Airloom just its first two inputs.
 
+## Scenes
+
+A **scene** is a saved mix: which loops are playing; every channel's level; every group's, input's and instrument's
+fader and mute; and each instrument's key (scale and octave) - the key changes the moment the scene is pressed, and
+the Fire's pads relight. Mutes fade over the morph rather than cutting, so muting one instrument and unmuting another
+in the next scene crossfades from one voice to the other. The **SCENES**
+strip above the groups holds them. Set up a mix and press **+ SCENE** to save it; press a scene to move there.
+
+- Recalling a scene **morphs**: loops it doesn't use fade out, loops it does fade in (on the beat or bar, if **Start**
+  says so), and faders glide to their places over the scene's **morph time** (default: the fade time when it was
+  saved). A bar along the scene's button shows the morph's progress; groups the scene mutes go quiet at the end.
+- A scene **keeps what you change while you're in it**: start a loop or move a fader, go to another scene, and coming
+  back finds it as you left it. Pressing the lit scene again puts it back as it was when you came in. To keep scenes
+  fixed as saved instead, right-click **+ SCENE** and untick *Scenes keep changes made in them*.
+- Right-click a scene to **update** it to the current mix, rename it, set its morph time (instant to 60 s), move it,
+  delete it, or assign a MIDI button. Right-click **+ SCENE** for MIDI buttons that step to the **next** and
+  **previous** scene - good on a foot switch.
+- Scenes don't change effects, monitoring, ARM or one-shots, and channels added after a scene was saved are left
+  as they are. Scenes and their MIDI buttons are saved with the set.
+
+## Stage view
+
+**STAGE** (header) or **F11** swaps the mixer for a view made for performing - the same set, drawn big:
+
+- **Scenes** across the top as large buttons (the morph bar fills along the active one), with + SCENE.
+- **Every group's loops as big tiles**: press to play or stop, exactly like their PLAY buttons (Start on beat or bar,
+  fades and crossfades all apply). Lit in the group's colour while playing, amber while fading in or **CUED**,
+  blinking while it waits to stop. One-shots are tiles too (marked 1x). Each group has its **MUTE** beside its name.
+- **LIVE** down the right: every input and instrument with a big mute toggle, and **MUTE OUT** at the bottom.
+
+The bottom bar (looper, tempo, SYNC, STOP ALL) and the count-in stay as they are. Press **MIXER** (or F11) to go back;
+Airloom remembers which view you were in. Right-click STAGE to put it on a MIDI button.
+
+## Time signature
+
+Click the **beat lights** (bottom bar; the signature shows beside them) to choose 2/4, 3/4, 4/4, 5/4, 6/8 or 7/8.
+Everything that counts bars follows it: the beat lights, Start on the bar, count-ins, Snap to bars, the first loop
+setting the tempo, synced "1 bar" delays and the Fire's PLAY light. In 6/8 and 7/8 the BPM counts eighth notes
+(plug-ins are given the matching quarter-note tempo). It's saved with the set.
+
 ## Recording in time
 
 With **Start** on *beat* or *bar*, REC doesn't start straight away: it counts you in to the next bar line at least a
 beat away (with nothing playing, one whole bar from the press). The beat lights go red and count the bar, the looper
-says how many beats are left, and the Fire's REC button blinks - start playing on the next 1. Press REC again during
+says how many beats are left, and the Fire's REC button blinks - start playing on the next 1. The count also shows
+**big in the middle of the window** (1, 2, 3, 4 - the last one red, "play on the next 1"), then **REC** for the first
+beat of the recording. Press REC again during
 the count-in to call it off. Recordings then start exactly on the bar, allowing for the interface's delay, so they
 sit on the same grid as the loops already playing. With **Start: now**, REC starts the moment you press it, as before.
 
@@ -222,6 +267,40 @@ after - Start on the bar, Snap to bars, synced delays, SYNC - then follows what 
 The Fire's **PLAY** button is a beat light while loops are playing or you're recording: green on beat 1, yellow on
 the others.
 
+## Effects
+
+Every input, instrument, group and channel has an **FX** panel. Tick a section (or turn one of its knobs) to switch it
+on; double-click a knob to reset it. In order through the chain:
+
+- **Channel** - gain, pan, and **Space**: how much goes to the shared Space reverb (see below).
+- **Gate** - silences what's under the threshold (hiss, room noise).
+- **Swell** - fades each note in, like a volume pedal, so the breath at the start of a flute note blooms in like a bowed
+  string. A gap below the threshold resets it for the next note.
+- **Low cut**, **EQ**, **Compressor**.
+- **Tape** - soft saturation (Drive), a slow pitch wobble (Wow) and rolled-off highs (Tone): a worn, older sound.
+- **Filter** - a resonant low-pass (or high-pass) for building up and pulling back; with a **Sweep rate** it moves by
+  itself, **Sweep depth** octaves either side. Best on a MidiMix knob (below).
+- **Octave** - adds a copy an octave down or up, a fifth up or down, or two octaves down, for a bigger sound from one flute.
+- **Chorus** - gentle detuned doubling that widens and thickens.
+- **Motion** - stereo **Width** (0 = mono, 200% = extra wide) and a slow **auto-pan** drifting the sound around.
+- **Delay** - synced to the BPM or free, ping-pong.
+- **Reverb** - with **Shimmer**: the tail rises an octave as it fades, the classic glowing ambient halo. **Dry** turns
+  the original sound down under it: at 0 only the reverb is left (Mix then sets how loud the reverb is), for a washed-out
+  sound or a group that's all space.
+
+**Space** (button under the master fader) is one big reverb that everything can share: turn up a channel's **Space**
+knob to send some of it there, after its fader. Sharing one room makes the set sound like one place, and is lighter on
+the computer than a reverb on every channel. The Space panel sets its decay, size, tone, pre-delay, movement, shimmer and
+return level; it's saved with the set.
+
+**Plug-in effects** go on inputs (their menu), on groups (the group's menu: **Plug-in effect...**) and on the master
+(**FX** under the master fader) - any VST3 effect, e.g. a Valhalla reverb on a whole loops group. A group's plug-in comes
+after its built-in effects. Their settings are saved with the set.
+
+**MIDI on knobs**: right-click any effect knob > Learn MIDI control, then turn a MidiMix knob. Moving it switches its
+section on, and an open panel follows along. Knobs on groups, channels and Space are saved with the set; knobs on
+inputs and instruments belong to the computer, like their faders.
+
 ## Sync
 
 Loops start the moment you press them, so after a while they can sit off each other's beat. **SYNC** (next to TAP)
@@ -230,6 +309,25 @@ slide into step with a 30 ms crossfade, and the beat lights follow. While overdu
 one the others line up with. Right-click SYNC to **restart all loops together from the top** instead, or to assign a
 MIDI button. Loops whose lengths fit together (whole bars at one tempo) stay together; loops of unrelated lengths drift
 apart again over time, so press SYNC whenever they need it.
+
+## On stage: cues, mute, CPU and the interface
+
+- **CUED:** with **Start** on *beat* or *bar*, a loop you press waits for its moment - its PLAY button blinks amber and
+  says **CUED** until it comes in (press again to cancel). Stopping one waits for the beat too: it blinks in its
+  colour until it stops. A MidiMix play button with a light blinks the same way, so you can tell without looking at
+  the screen.
+- **MUTE OUT** (under the master fader) silences the speakers instantly - for emergencies like feedback. Unlike
+  STOP ALL and Esc (musical fades) everything keeps running underneath, so pressing it again brings the sound
+  straight back. It blinks red (**MUTED**) while on, and set recordings hear the silence too. Right-click to assign a
+  MIDI button.
+- **CPU** (in the header) shows how hard the audio is working, and how many **dropouts** (clicks or gaps from the
+  computer not keeping up) there have been. Amber over 70%, red over 90%; the dropout count flashes red when a new one
+  happens. Click it to reset the count. Fix: a bigger buffer in Audio Settings, or fewer reverbs and plug-ins (use
+  Space).
+- **Interface unplugged:** if the interface disappears (cable, power) or stops responding, a red banner says so and
+  Airloom goes silent instead of switching to the computer's own speakers and mic (which could feed back). Plug it
+  back in and it reconnects by itself with the same settings; loops carry on from where they stopped. Choosing a
+  device in Audio Settings instead ends the wait.
 
 ## Freeze
 
@@ -261,7 +359,7 @@ press the hardware control. Learnable controls:
 
 - each channel's **PLAY/STOP**, **XF** and **volume** (a MIDI tag appears on the channel once it has any)
 - each group's **fader** and **mute**
-- master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, TAP, SYNC, FREEZE, REC SET
+- master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, MUTE OUT, TAP, SYNC, FREEZE, REC SET
 
 Channel and group assignments are **saved with the set** (and travel in an exported pack), and follow the channel or
 group wherever it's moved. The rest belong to the computer. Out of the box only the MidiMix **master fader**, its

@@ -23,6 +23,18 @@ inline juce::String newUid()
 // sample loaded. Files can live anywhere; saving a set gathers them into its folder.
 struct LiveSet
 {
+    // An effect plug-in placed on a group or the master: which one, and its settings.
+    struct PluginSlot
+    {
+        juce::String xml;              // the plug-in's description
+        juce::String state;            // its settings, base64
+        juce::String name;             // shown while it's missing or loading
+
+        bool isEmpty() const    { return xml.isEmpty(); }
+        void addToXml (juce::XmlElement& parent) const;
+        static PluginSlot fromXml (const juce::XmlElement* parent);
+    };
+
     // One channel: a sample, how it plays, and its own volume.
     struct Slot
     {
@@ -57,6 +69,7 @@ struct LiveSet
         juce::Point<int> position { -1, -1 };   // where the group was placed; -1 = not placed yet
         juce::String uid = newUid();   // what MIDI assignments refer to
         FxSettings fx;
+        PluginSlot insert;             // an effect plug-in on the whole group, after its effects
         std::vector<Slot> slots;
 
         int engine = -1;               // runtime: which audio engine plays this row
@@ -94,13 +107,32 @@ struct LiveSet
         bool muted = false;
         bool recordWithFx = true;
         FxSettings fx;
-        juce::String midiSource;       // part of a MIDI device name; empty = every keyboard and the Fire
+        juce::String midiSource;       // the MIDI device that plays it; empty = every keyboard and Fire
         int padRoot = 9, padScale = 0, padOctave = 3;
 
         bool armed = false;            // runtime, like the inputs
     };
 
     static constexpr int maxInstruments = 4;
+
+    // A saved mix: which loops play and every channel and group level. Recalling one morphs
+    // there over 'morphSeconds'. Channels and groups are found by uid; ones added since are
+    // left alone, and ones removed since are skipped.
+    struct Scene
+    {
+        juce::String name;
+        juce::String uid = newUid();   // what MIDI assignments refer to
+        double morphSeconds = 8.0;
+
+        struct Channel { juce::String uid; bool playing = false; double volumeDb = 0.0; };
+        struct Group   { juce::String uid; double faderDb = 0.0; bool muted = false; };
+        struct Key     { int instrument = 0, root = 9, scale = 0, octave = 3; };   // an instrument's Fire key, by index
+        struct Strip   { enum Kind { input, instrument } kind = input; int index = 0; double faderDb = 0.0; bool muted = false; };
+        std::vector<Channel> channels;
+        std::vector<Group> groups;
+        std::vector<Key> keys;
+        std::vector<Strip> strips;     // inputs' and instruments' faders and mutes, by index
+    };
 
     static constexpr int maxInputs = 8;          // input strips in a set
     static constexpr int maxDeviceInputs = 16;   // interface inputs opened
@@ -109,13 +141,22 @@ struct LiveSet
     std::vector<Row> rows;
     std::vector<Input> inputs = defaultInputs();
     std::vector<Instrument> instruments;
+    std::vector<Scene> scenes;
+    bool scenesKeepChanges = true;     // leaving a scene saves the mix you made in it
     juce::Array<juce::File> pool;      // every sample loaded into the set, used or not
     juce::File file;                   // the .liverig file; empty until saved
     double masterDb = 0.0;
+    FxSettings space = SpaceReverb::defaults();   // the shared reverb channels send to
+    PluginSlot masterInsert;                       // an effect plug-in on the master
     double fadeSeconds = 8.0;
     enum class LoopStart { now, beat, bar };
     LoopStart loopStart = LoopStart::now;   // when a pressed loop comes in
     double bpm = 72.0;                 // for synced delays and snapping recorded loops to bars
+
+    // Beats in a bar, and the note that's one beat (BPM counts these: in 6/8 it counts eighths).
+    int beatsPerBar = 4, beatUnit = 4;
+    struct TimeSignature { int beats, unit; };
+    static constexpr TimeSignature timeSignatures[] = { { 2, 4 }, { 3, 4 }, { 4, 4 }, { 5, 4 }, { 6, 8 }, { 7, 8 } };
     LoopLength loopLength = LoopLength::free;
     juce::Point<int> inputsPosition { -1, -1 };   // where the Inputs + Looper group was placed
     std::shared_ptr<juce::XmlElement> midi;       // MIDI assigned to this set's channels and groups

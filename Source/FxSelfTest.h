@@ -9,6 +9,8 @@
 #include "LoopChannel.h"
 #include "Looper.h"
 #include "TempoGuess.h"
+#include "FxPanel.h"
+#include "StageView.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
@@ -166,6 +168,262 @@ namespace FxSelfTest
             check (finite && out.getMagnitude (0, out.getNumSamples()) < 100.0f,
                    "Full chain, extreme settings, 10 s of loud noise: finite and bounded (peak "
                        + juce::String (out.getMagnitude (0, out.getNumSamples()), 1) + ")");
+        }
+
+        // ---- The newer effects ----
+        {
+            // Power at one frequency (Goertzel), for checking pitch.
+            auto powerAt = [] (const float* x, int n, double hz)
+            {
+                const double w = juce::MathConstants<double>::twoPi * hz / sr, c = 2.0 * std::cos (w);
+                double s1 = 0.0, s2 = 0.0;
+                for (int i = 0; i < n; ++i) { const double s0 = x[i] + c * s1 - s2; s2 = s1; s1 = s0; }
+                return s1 * s1 + s2 * s2 - c * s1 * s2;
+            };
+            auto sine = [] (double hz, float level) { return [hz, level] (int, int i) { return level * (float) std::sin (juce::MathConstants<double>::twoPi * hz * i / sr); }; };
+
+            // Octave: the pitch-shifted copy alone (dry removed) sits an octave away.
+            for (int interval : { 0, 1 })
+            {
+                FxSettings o;
+                o.octaveOn = true; o.octaveInterval = interval; o.octaveMix = 1.0;
+                auto out = render (o, 1.0, sine (330.0, 0.5f));
+                auto dry = render ({}, 1.0, sine (330.0, 0.5f));
+                out.addFrom (0, 0, dry, 0, 0, out.getNumSamples(), -1.0f);
+                const float* x = out.getReadPointer (0, (int) (0.3 * sr));
+                const int n = (int) (0.6 * sr);
+                const double target = interval == 0 ? 165.0 : 660.0;
+                const double ratio = powerAt (x, n, target) / juce::jmax (1.0e-12, powerAt (x, n, 330.0));
+                check (ratio > 10.0, juce::String (shiftIntervals[interval].name) + ": the shifted copy is at "
+                                         + juce::String (target, 0) + " Hz (" + juce::String (10.0 * std::log10 (ratio), 1) + " dB over the original)");
+            }
+
+            // Shimmer: 1 s of noise into a 20 s reverb at full shimmer rises an octave and still fades away.
+            {
+                FxSettings sh;
+                sh.reverbOn = true; sh.reverbDecay = 20.0; sh.reverbMix = 1.0; sh.reverbShimmer = 1.0;
+                juce::Random random (7);
+                auto out = render (sh, 45.0, [&random] (int, int i) { return i < (int) sr ? (random.nextFloat() - 0.5f) * 0.6f : 0.0f; });
+                const float early = rms (out, 0, 2.0, 3.0), mid = rms (out, 0, 15.0, 16.0), late = rms (out, 0, 44.0, 45.0);
+                const float peak = out.getMagnitude (0, 0, out.getNumSamples());
+                check (std::isfinite (peak) && peak < 3.0f && late < early * 0.1f && mid < early,
+                       "Shimmer at full on a 20 s reverb stays bounded and fades (peak " + juce::String (peak, 2) + ", "
+                           + juce::String (juce::Decibels::gainToDecibels (late / early), 1) + " dB after 42 s)");
+            }
+
+            // Swell: a note starting from silence comes in over the attack time.
+            {
+                FxSettings sw;
+                sw.swellOn = true; sw.swellAttackMs = 500.0;
+                auto out = render (sw, 1.2, [] (int, int i) { return i < (int) (0.2 * sr) ? 0.0f : 0.5f * (float) std::sin (0.06 * i); });
+                const float start = rms (out, 0, 0.2, 0.25), later = rms (out, 0, 0.8, 0.85);
+                check (start < later * 0.1f && later > 0.3f,
+                       "Swell fades a note in (first 50 ms " + juce::String (juce::Decibels::gainToDecibels (start / later), 1) + " dB, full after the attack)");
+            }
+
+            // Filter: a 500 Hz low-pass takes 5 kHz well down; as a high-pass it keeps it.
+            {
+                FxSettings f;
+                f.filterOn = true; f.filterCutoffHz = 500.0; f.filterResonance = 0.0;
+                const float low = rms (render (f, 0.5, sine (5000.0, 0.5f)), 0, 0.2, 0.5);
+                f.filterHighPass = true;
+                const float high = rms (render (f, 0.5, sine (5000.0, 0.5f)), 0, 0.2, 0.5);
+                check (juce::Decibels::gainToDecibels (low / 0.3536f) < -20.0f && high > 0.3f,
+                       "Filter: low-pass at 500 Hz cuts 5 kHz by " + juce::String (-juce::Decibels::gainToDecibels (low / 0.3536f), 1) + " dB, high-pass keeps it");
+
+                f.filterHighPass = false; f.filterLfoRate = 1.0; f.filterLfoDepth = 3.0; f.filterResonance = 1.0;
+                auto swept = render (f, 3.0, sine (1000.0, 0.5f));
+                const float peak = swept.getMagnitude (0, 0, swept.getNumSamples());
+                check (std::isfinite (peak) && peak < 1.5f, "Filter sweeping at full resonance stays bounded (peak " + juce::String (peak, 2) + ")");
+            }
+
+            // Tape: driven hard it rounds off rather than clipping; quiet signals pass at about their level.
+            {
+                FxSettings t;
+                t.tapeOn = true; t.tapeDrive = 1.0; t.tapeWow = 1.0; t.tapeTone = 1.0;
+                auto loud = render (t, 1.0, sine (200.0, 2.0f));
+                const float peak = loud.getMagnitude (0, (int) (0.1 * sr), (int) (0.8 * sr));
+                t.tapeDrive = 0.0;
+                const float quiet = rms (render (t, 1.0, sine (200.0, 0.1f)), 0, 0.2, 1.0);
+                check (std::isfinite (peak) && peak < 0.4f && std::abs (juce::Decibels::gainToDecibels (quiet / 0.0707f)) < 1.5f,
+                       "Tape: a +6 dB signal comes out at " + juce::String (peak, 2) + ", a quiet one at "
+                           + juce::String (juce::Decibels::gainToDecibels (quiet / 0.0707f), 1) + " dB");
+            }
+
+            // Chorus thickens without getting louder or unstable.
+            {
+                FxSettings c;
+                c.chorusOn = true; c.chorusDepth = 1.0; c.chorusMix = 0.5; c.chorusRate = 2.0;
+                auto out = render (c, 1.0, sine (440.0, 0.5f));
+                const float level = rms (out, 0, 0.2, 1.0);
+                check (std::isfinite (level) && level > 0.15f && level < 0.5f, "Chorus level stays even (" + juce::String (level, 3) + ")");
+            }
+
+            // Motion: width 0 makes it mono; the auto-pan moves it between the sides.
+            {
+                FxSettings m;
+                m.motionOn = true; m.motionWidth = 0.0; m.motionPanDepth = 0.0;
+                auto mono = render (m, 0.2, [] (int ch, int i) { return ch == 0 ? 0.5f * (float) std::sin (0.05 * i) : 0.0f; });
+                float diff = 0.0f;
+                for (int i = 0; i < mono.getNumSamples(); ++i)
+                    diff = juce::jmax (diff, std::abs (mono.getSample (0, i) - mono.getSample (1, i)));
+
+                m.motionWidth = 1.0; m.motionPanDepth = 1.0; m.motionPanRate = 1.0;
+                auto panned = render (m, 1.0, sine (440.0, 0.5f));
+                const float leftThen = rms (panned, 0, 0.2, 0.3), rightThen = rms (panned, 1, 0.2, 0.3);
+                const float leftLater = rms (panned, 0, 0.7, 0.8), rightLater = rms (panned, 1, 0.7, 0.8);
+                check (diff < 1.0e-5f && rightThen > leftThen * 3.0f && leftLater > rightLater * 3.0f,
+                       "Motion: width 0 is mono, the auto-pan swings from one side to the other");
+            }
+
+            // Space: sends on the bus come back as the shared reverb, and the bus is cleared each block.
+            {
+                SpaceReverb space;
+                space.setSettings (SpaceReverb::defaults());
+                space.prepare (sr, block);
+                juce::AudioBuffer<float> out (2, block);
+                out.clear();
+                float one = 1.0f;
+                SpaceReverb::addToBus (0, 0, &one, 1, 1.0f);
+                SpaceReverb::addToBus (1, 0, &one, 1, 1.0f);
+                float tail = 0.0f;
+                for (int b = 0; b < 100; ++b)
+                {
+                    out.clear();
+                    space.process (out, 0, block);
+                    tail = juce::jmax (tail, out.getMagnitude (0, 0, block));
+                }
+                check (tail > 0.001f && SpaceReverb::bus.getMagnitude (0, 0, block) == 0.0f,
+                       "Space returns what was sent as reverb (peak " + juce::String (tail, 3) + ") and empties its bus");
+            }
+
+            // Every knob is saved and loaded by name, and MIDI finds it by the same name.
+            {
+                FxSettings maxed;
+                juce::StringArray lost;
+                for (auto name : { "gainDb", "spaceSend", "swellAttackMs", "tapeWow", "filterCutoffHz", "filterLfoDepth", "octaveMix",
+                                   "chorusRate", "reverbShimmer", "motionWidth", "motionPanRate", "reverbMix" })
+                {
+                    auto* param = findFxParameter (name);
+                    if (param == nullptr) { lost.add (name); continue; }
+                    *maxed.findParameter (name) = param->max;
+                }
+                maxed.octaveInterval = 2;
+                maxed.chorusOn = maxed.motionOn = maxed.filterHighPass = true;
+                juce::XmlElement parent ("P");
+                maxed.addToXml (parent);
+                const auto back = FxSettings::fromXml (parent.getChildByName ("Fx"));
+                for (auto name : { "gainDb", "spaceSend", "swellAttackMs", "tapeWow", "filterCutoffHz", "filterLfoDepth", "octaveMix",
+                                   "chorusRate", "reverbShimmer", "motionWidth", "motionPanRate", "reverbMix" })
+                    if (auto* param = findFxParameter (name); param != nullptr && back.*(param->member) != param->max)
+                        lost.add (name);
+                if (back.octaveInterval != 2 || ! back.chorusOn || ! back.motionOn || ! back.filterHighPass)
+                    lost.add ("switches");
+                check (lost.isEmpty(), "Effect settings save and load by name" + (lost.isEmpty() ? juce::String() : " - lost: " + lost.joinIntoString (", ")));
+            }
+        }
+
+        // Reverb Dry: at 0 only the reverb is left (the impulse itself is gone, its tail isn't).
+        {
+            FxSettings r;
+            r.reverbOn = true; r.reverbMix = 0.5; r.reverbPredelayMs = 20.0;
+            const float dryFull = render (r, 1.0, impulse).getSample (0, 0);
+            r.reverbDry = 0.0;
+            auto wetOnly = render (r, 1.0, impulse);
+            const float dryNone = wetOnly.getSample (0, 0);
+            const float tail = rms (wetOnly, 0, 0.05, 0.5);
+            check (std::abs (dryFull - 0.75f) < 0.01f && std::abs (dryNone) < 1.0e-6f && tail > 1.0e-4f,
+                   "Reverb Dry at 0 leaves only the reverb (original " + juce::String (dryFull, 2) + " -> " + juce::String (dryNone, 2) + ", tail kept)");
+        }
+
+        // ---- Space sends, plug-in slots and MIDI on effect knobs ----
+        {
+            // An input sends half of itself, after its fader, to the Space bus.
+            SpaceReverb space;
+            space.prepare (sr, block);
+            InputChannel input;
+            input.setGain (0.5f);   // before prepare, so the fader starts there rather than gliding
+            input.prepare (sr, block);
+            input.setMonitor (true);
+            FxSettings send;
+            send.spaceSend = 0.5;
+            input.getFx().setSettings (send);
+            juce::AudioBuffer<float> in (2, block), out (2, block), recordBus (2, block);
+            for (int i = 0; i < block; ++i)
+                in.setSample (0, i, 1.0f);
+            in.clear (1, 0, block);
+            out.clear();
+            recordBus.clear();
+            input.process (in, 1, out, 0, block, recordBus);
+            const float sent = SpaceReverb::bus.getSample (0, block - 1);
+            SpaceReverb::bus.clear();
+            check (std::abs (sent - 0.25f) < 0.01f, "An input's Space send follows its fader (1.0 at -6 dB, half sent: "
+                                                        + juce::String (sent, 3) + ", expect 0.250)");
+
+            // A set keeps its Space settings and the plug-ins on its groups and master.
+            const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory);
+            auto set = LiveSet::makeDefault();
+            set.space.reverbShimmer = 0.6;
+            set.rows[0].insert = { "<PLUGIN name=\"Valhalla\"/>", "c3RhdGU=", "Valhalla" };
+            set.masterInsert = { "<PLUGIN name=\"Limiter\"/>", "", "Limiter" };
+            LiveSet back;
+            back.loadFromXml (*set.toXml (folder), folder);
+            check (std::abs (back.space.reverbShimmer - 0.6) < 1.0e-9 && back.space.reverbOn && back.rows[0].insert.name == "Valhalla"
+                       && back.rows[0].insert.state == "c3RhdGU=" && back.rows[0].insert.xml.contains ("Valhalla")
+                       && back.masterInsert.name == "Limiter" && back.rows[1].insert.isEmpty() && back.inputs[0].insertXml.isEmpty(),
+                   "A set keeps its Space settings and the plug-ins on a group and the master");
+
+            // Scenes and the time signature come back with the set.
+            {
+                LiveSet withScenes = LiveSet::makeDefault();
+                withScenes.beatsPerBar = 6; withScenes.beatUnit = 8;
+                LiveSet::Scene sc;
+                sc.name = "Dawn"; sc.morphSeconds = 15.0;
+                sc.channels.push_back ({ withScenes.rows[0].slots[0].uid, true, -6.5 });
+                sc.groups.push_back ({ withScenes.rows[1].uid, -12.0, true });
+                sc.keys.push_back ({ 1, 10, 2, 4 });   // instrument 2 in Bb, natural minor, octave 4
+                sc.strips.push_back ({ LiveSet::Scene::Strip::instrument, 1, -3.0, true });
+                withScenes.scenes.push_back (sc);
+                LiveSet loaded;
+                loaded.loadFromXml (*withScenes.toXml (folder), folder);
+                const bool ok = loaded.beatsPerBar == 6 && loaded.beatUnit == 8 && loaded.scenes.size() == 1
+                             && loaded.scenes[0].name == "Dawn" && loaded.scenes[0].uid == sc.uid && loaded.scenes[0].morphSeconds == 15.0
+                             && loaded.scenes[0].channels.size() == 1 && loaded.scenes[0].channels[0].playing
+                             && loaded.scenes[0].channels[0].volumeDb == -6.5 && loaded.scenes[0].groups[0].muted
+                             && loaded.scenes[0].groups[0].faderDb == -12.0
+                             && loaded.scenes[0].keys.size() == 1 && loaded.scenes[0].keys[0].instrument == 1
+                             && loaded.scenes[0].keys[0].root == 10 && loaded.scenes[0].keys[0].scale == 2
+                             && loaded.scenes[0].keys[0].octave == 4
+                             && loaded.scenes[0].strips.size() == 1 && loaded.scenes[0].strips[0].kind == LiveSet::Scene::Strip::instrument
+                             && loaded.scenes[0].strips[0].index == 1 && loaded.scenes[0].strips[0].faderDb == -3.0
+                             && loaded.scenes[0].strips[0].muted;
+                check (ok && MidiMap::isSetTarget ("scene." + sc.uid) && ! MidiMap::isSetTarget ("scene.next"),
+                       "A set keeps its scenes (with input/instrument mutes, keys and MIDI buttons) and its 6/8 time signature");
+            }
+
+            // An older set without Space gets the defaults.
+            auto old = juce::parseXML ("<LiveRigSet version=\"3\"/>");
+            LiveSet oldSet;
+            oldSet.loadFromXml (*old, folder);
+            check (oldSet.space.reverbOn && oldSet.space.reverbDecay == SpaceReverb::defaults().reverbDecay && oldSet.masterInsert.isEmpty(),
+                   "An older set gets the default Space");
+
+            // MIDI on knobs: the ends of a knob's travel are the ends of its range, and the middle is its centre.
+            const auto* cutoff = findFxParameter ("filterCutoffHz");
+            const auto range = rangeOf (*cutoff);
+            check (range.convertFrom0to1 (0.0) == cutoff->min && range.convertFrom0to1 (1.0) == cutoff->max
+                       && std::abs (range.convertFrom0to1 (0.5) - cutoff->skewMidPoint) < 2.0,
+                   "A MIDI knob covers the filter's whole range, centred on " + juce::String (range.convertFrom0to1 (0.5), 0) + " Hz");
+            check (MidiMap::isSetTarget ("fx.grp.abc.reverbMix") && MidiMap::isSetTarget ("fx.ch.abc.spaceSend")
+                       && MidiMap::isSetTarget ("fx.space.reverbShimmer") && ! MidiMap::isSetTarget ("fx.in.0.reverbMix"),
+                   "Effect knobs on groups, channels and Space are saved with the set; input ones with the computer");
+
+            // Two Fires: Windows names the second "2 - FL STUDIO FIRE", which contains the first one's name.
+            check (InstrumentChannel::playsFrom ("FL STUDIO FIRE", "FL STUDIO FIRE")
+                       && ! InstrumentChannel::playsFrom ("FL STUDIO FIRE", "2 - FL STUDIO FIRE")
+                       && ! InstrumentChannel::playsFrom ("2 - FL STUDIO FIRE", "FL STUDIO FIRE")
+                       && InstrumentChannel::playsFrom ({}, "2 - FL STUDIO FIRE"),
+                   "With two Fires, an instrument set to one Fire isn't played by the other");
         }
 
         // ---- Looper ----
@@ -422,6 +680,24 @@ namespace FxSelfTest
                 found.add (juce::String (o.bars) + "=" + juce::String (o.bpm, 1));
             check (found.contains ("2=60.0") && found.contains ("4=120.0") && found.contains ("3=90.0"),
                    "Tempo options for an 8 s loop: " + found.joinIntoString (", "));
+
+            // In 3/4 a 6-second loop is 2 bars at 60 or 4 at 120; a synced "1 bar" delay is 3 beats.
+            juce::StringArray waltz;
+            for (auto& o : TempoGuess::fromLength (6.0, 3))
+                waltz.add (juce::String (o.bars) + "=" + juce::String (o.bpm, 1));
+            FxSettings d;
+            d.delaySync = true;
+            d.delayDivision = numDelayDivisions - 1;
+            FxChain::beatsPerBar = 3;
+            const double bar34 = d.delayTimeMs (60.0);
+            FxChain::beatsPerBar = 6; FxChain::beatUnit = 8;
+            d.delayDivision = 5;   // 1/4
+            const double quarterIn68 = d.delayTimeMs (120.0);   // 120 eighths a minute: a quarter is 1 s
+            FxChain::beatsPerBar = 4; FxChain::beatUnit = 4;
+            check (waltz.contains ("2=60.0") && waltz.contains ("4=120.0") && std::abs (bar34 - 3000.0) < 0.1
+                       && std::abs (quarterIn68 - 1000.0) < 0.1,
+                   "3/4: tempos " + waltz.joinIntoString (", ") + ", 1-bar delay " + juce::String (bar34, 0)
+                       + " ms; 6/8: 1/4 delay " + juce::String (quarterIn68, 0) + " ms");
         }
 
         {
@@ -542,6 +818,24 @@ namespace FxSelfTest
             float tail = 0.0f;
             for (int b = 0; b < 60; ++b) { out.clear(); row.process (out, 0, block); if (b > 40) tail = juce::jmax (tail, out.getRMSLevel (0, 0, block)); }
             check (tail > 0.001f, "Channel reverb tail rings out after the channel stops (" + juce::String (juce::Decibels::gainToDecibels (tail), 1) + " dB)");
+
+            // A loop waiting for its beat says so - to start, then to stop - and not once it's happened.
+            LoopChannel cued;
+            cued.prepare (sr, block);
+            LoopPlayer::blockClock = 1000;
+            cued.startLoop (3, tone, 0.0, 1.0f, 5000, 5000);
+            const bool waitsToStart = cued.cueFor (3) == LoopChannel::Cue::start;
+            LoopPlayer::blockClock = 5000;
+            out.clear(); cued.process (out, 0, block);
+            const bool started = cued.cueFor (3) == LoopChannel::Cue::none;
+            cued.stopLoop (3, 0.0, 9000);
+            const bool waitsToStop = cued.cueFor (3) == LoopChannel::Cue::stop;
+            LoopPlayer::blockClock = 9000;
+            out.clear(); cued.process (out, 0, block);
+            const bool stopped = cued.cueFor (3) == LoopChannel::Cue::none;
+            LoopPlayer::blockClock = 0;
+            check (waitsToStart && started && waitsToStop && stopped,
+                   "A loop on Start beat/bar shows CUED until it comes in, and again until it stops");
         }
 
         // ---- Output limiter and recording level ----
@@ -892,6 +1186,34 @@ namespace FxSelfTest
                     }
                 }
             }
+        }
+
+        // ---- Stage view: drawn with a sample set, saved as a picture to look at ----
+        {
+            StageView stage;
+            stage.setBounds (0, 0, 1260, 720);
+            StageView::Content c;
+            c.scenes.addArray ({ "Dawn", "Emergence", "Immersion", "Release" });
+            c.activeScene = 1;
+            c.morphProgress = 0.4f;
+            using St = StageView::State;
+            c.groups.push_back ({ "Ambient", Theme::rowColour (1), false, 0,
+                                  { { "Birds", 0, 0, St::playing }, { "Water lapping", 0, 1, St::fadingIn }, { "Rain", 0, 2, St::idle },
+                                    { "Whale song", 0, 3, St::cuedStart }, { "Kids playing", 0, 4, St::idle } } });
+            c.groups.push_back ({ "Pads", Theme::rowColour (0), false, 1,
+                                  { { "Bb major", 1, 0, St::playing }, { "G minor", 1, 1, St::cuedStop }, { "C major", 1, 2, St::idle } } });
+            c.groups.push_back ({ "One-shots", Theme::rowColour (2), true, 2,
+                                  { { "Thunder", 2, 0, St::idle, true }, { "Hawk screech", 2, 1, St::idle, true } } });
+            c.live.push_back ({ "Mic", Theme::rowColour (4), false, false, 0 });
+            c.live.push_back ({ "Instrument", Theme::rowColour (4), true, false, 1 });
+            c.live.push_back ({ "Zyklop", Theme::accent, false, true, 0 });
+            stage.setContent (c);
+            const auto image = stage.createComponentSnapshot (stage.getLocalBounds());
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-stage.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            juce::PNGImageFormat png;
+            check (out.openedOk() && png.writeImageToStream (image, out), "Stage view drawn to " + file.getFullPathName());
         }
 
         report.add ({});

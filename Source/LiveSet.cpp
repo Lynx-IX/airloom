@@ -1,5 +1,30 @@
 #include "LiveSet.h"
 
+void LiveSet::PluginSlot::addToXml (juce::XmlElement& parent) const
+{
+    if (isEmpty())
+        return;
+
+    auto* pe = parent.createNewChildElement ("Insert");
+    pe->setAttribute ("name", name);
+    pe->setAttribute ("state", state);
+    if (auto plugin = juce::parseXML (xml))
+        pe->addChildElement (plugin.release());
+}
+
+LiveSet::PluginSlot LiveSet::PluginSlot::fromXml (const juce::XmlElement* parent)
+{
+    PluginSlot slot;
+    if (auto* pe = parent != nullptr ? parent->getChildByName ("Insert") : nullptr)
+    {
+        slot.name = pe->getStringAttribute ("name");
+        slot.state = pe->getStringAttribute ("state");
+        if (auto* plugin = pe->getChildByName ("PLUGIN"))
+            slot.xml = plugin->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
+    }
+    return slot;
+}
+
 LiveSet::Row LiveSet::makeRow (const juce::String& name, bool oneShot, int numSlots)
 {
     Row r;
@@ -135,10 +160,54 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     xml->setAttribute ("fade", fadeSeconds);
     xml->setAttribute ("loopStart", (int) loopStart);
     xml->setAttribute ("bpm", bpm);
+    xml->setAttribute ("beatsPerBar", beatsPerBar);
+    xml->setAttribute ("beatUnit", beatUnit);
     xml->setAttribute ("loopLength", (int) loopLength);
     xml->setAttribute ("inputsX", inputsPosition.x);
     xml->setAttribute ("inputsY", inputsPosition.y);
     xml->setAttribute ("inputsColumns", inputsColumns);
+    space.addToXml (*xml->createNewChildElement ("Space"));
+
+    auto* scenesXml = xml->createNewChildElement ("Scenes");
+    scenesXml->setAttribute ("keepChanges", scenesKeepChanges);
+    for (const auto& sc : scenes)
+    {
+        auto* e = scenesXml->createNewChildElement ("Scene");
+        e->setAttribute ("name", sc.name);
+        e->setAttribute ("uid", sc.uid);
+        e->setAttribute ("morph", sc.morphSeconds);
+        for (const auto& c : sc.channels)
+        {
+            auto* ce = e->createNewChildElement ("Channel");
+            ce->setAttribute ("uid", c.uid);
+            ce->setAttribute ("playing", c.playing);
+            ce->setAttribute ("volume", c.volumeDb);
+        }
+        for (const auto& gr : sc.groups)
+        {
+            auto* ge = e->createNewChildElement ("Group");
+            ge->setAttribute ("uid", gr.uid);
+            ge->setAttribute ("fader", gr.faderDb);
+            ge->setAttribute ("muted", gr.muted);
+        }
+        for (const auto& st : sc.strips)
+        {
+            auto* se = e->createNewChildElement ("Strip");
+            se->setAttribute ("kind", st.kind == Scene::Strip::instrument ? "instrument" : "input");
+            se->setAttribute ("index", st.index);
+            se->setAttribute ("fader", st.faderDb);
+            se->setAttribute ("muted", st.muted);
+        }
+        for (const auto& k : sc.keys)
+        {
+            auto* ke = e->createNewChildElement ("Key");
+            ke->setAttribute ("instrument", k.instrument);
+            ke->setAttribute ("root", k.root);
+            ke->setAttribute ("scale", k.scale);
+            ke->setAttribute ("octave", k.octave);
+        }
+    }
+    masterInsert.addToXml (*xml);
 
     for (auto& r : rows)
     {
@@ -153,6 +222,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
         re->setAttribute ("x", r.position.x);
         re->setAttribute ("y", r.position.y);
         r.fx.addToXml (*re);
+        r.insert.addToXml (*re);
 
         for (auto& s : r.slots)
         {
@@ -226,12 +296,44 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     fadeSeconds = xml.getDoubleAttribute ("fade", 8.0);
     loopStart = (LoopStart) juce::jlimit (0, 2, xml.getIntAttribute ("loopStart", 0));
     bpm = juce::jlimit (30.0, 240.0, xml.getDoubleAttribute ("bpm", 72.0));
+    beatsPerBar = juce::jlimit (1, 16, xml.getIntAttribute ("beatsPerBar", 4));
+    beatUnit = xml.getIntAttribute ("beatUnit", 4) == 8 ? 8 : 4;
     loopLength = (LoopLength) juce::jlimit (0, 2, xml.getIntAttribute ("loopLength", 0));
     inputsPosition = { xml.getIntAttribute ("inputsX", -1), xml.getIntAttribute ("inputsY", -1) };
     midi.reset();
     if (auto* m = xml.getChildByName ("MidiMap"))
         midi = std::make_shared<juce::XmlElement> (*m);
     inputsColumns = juce::jmax (0, xml.getIntAttribute ("inputsColumns", 0));
+    {
+        const auto* se = xml.getChildByName ("Space");
+        space = FxSettings::fromXml (se != nullptr ? se->getChildByName ("Fx") : nullptr, SpaceReverb::defaults());
+    }
+    masterInsert = PluginSlot::fromXml (&xml);
+
+    scenes.clear();
+    const auto* scenesXml = xml.getChildByName ("Scenes");
+    scenesKeepChanges = scenesXml == nullptr || scenesXml->getBoolAttribute ("keepChanges", true);
+    if (scenesXml != nullptr)
+        for (auto* e : scenesXml->getChildWithTagNameIterator ("Scene"))
+        {
+            Scene sc;
+            sc.name = e->getStringAttribute ("name", "Scene");
+            sc.uid = e->getStringAttribute ("uid", sc.uid);
+            sc.morphSeconds = juce::jlimit (0.0, 120.0, e->getDoubleAttribute ("morph", 8.0));
+            for (auto* ce : e->getChildWithTagNameIterator ("Channel"))
+                sc.channels.push_back ({ ce->getStringAttribute ("uid"), ce->getBoolAttribute ("playing"),
+                                         ce->getDoubleAttribute ("volume") });
+            for (auto* ge : e->getChildWithTagNameIterator ("Group"))
+                sc.groups.push_back ({ ge->getStringAttribute ("uid"), ge->getDoubleAttribute ("fader"),
+                                       ge->getBoolAttribute ("muted") });
+            for (auto* se : e->getChildWithTagNameIterator ("Strip"))
+                sc.strips.push_back ({ se->getStringAttribute ("kind") == "instrument" ? Scene::Strip::instrument : Scene::Strip::input,
+                                       se->getIntAttribute ("index"), se->getDoubleAttribute ("fader"), se->getBoolAttribute ("muted") });
+            for (auto* ke : e->getChildWithTagNameIterator ("Key"))
+                sc.keys.push_back ({ ke->getIntAttribute ("instrument"), ke->getIntAttribute ("root", 9),
+                                     ke->getIntAttribute ("scale"), ke->getIntAttribute ("octave", 3) });
+            scenes.push_back (std::move (sc));
+        }
 
     for (auto* re : xml.getChildWithTagNameIterator ("Row"))
     {
@@ -248,6 +350,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
         r.uid = re->getStringAttribute ("uid", r.uid);
         r.position = { re->getIntAttribute ("x", -1), re->getIntAttribute ("y", -1) };
         r.fx = FxSettings::fromXml (re->getChildByName ("Fx"));
+        r.insert = PluginSlot::fromXml (re);
 
         for (auto* se : re->getChildWithTagNameIterator ("Channel"))
         {

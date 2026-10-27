@@ -21,7 +21,9 @@ struct MidiBinding
 // first two REC ARM buttons and the Fire's REC button start assigned.
 //
 // Targets for a set's channels and groups ("ch." and "grp.") are saved with
-// the set; the rest (master, inputs, looper, tempo) belong to the computer.
+// the set, as are effect knobs on them and on Space ("fx.ch.<uid>.reverbMix",
+// "fx.grp.<uid>...", "fx.space..."); the rest (master, inputs and their effects,
+// instruments, looper, tempo) belong to the computer.
 class MidiMap
 {
 public:
@@ -31,7 +33,9 @@ public:
 
     static bool isSetTarget (const juce::String& target)
     {
-        return target.startsWith ("ch.") || target.startsWith ("grp.");
+        return target.startsWith ("ch.") || target.startsWith ("grp.")
+            || target.startsWith ("fx.ch.") || target.startsWith ("fx.grp.") || target.startsWith ("fx.space.")
+            || (target.startsWith ("scene.") && target != "scene.next" && target != "scene.prev");
     }
 
     void removeIf (const std::function<bool (const juce::String&)>& shouldRemove);
@@ -41,6 +45,13 @@ public:
     void bind (const juce::String& target, MidiBinding binding);
     void clear (const juce::String& target)    { bindings.erase (target); }
     MidiBinding get (const juce::String& target) const;
+    juce::StringArray getTargets() const
+    {
+        juce::StringArray targets;
+        for (auto& [target, binding] : bindings)
+            targets.add (target);
+        return targets;
+    }
 
     juce::StringArray findTargets (const juce::String& deviceName, const juce::MidiMessage& m) const;
 
