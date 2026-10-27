@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "FxSelfTest.h"
+#include "PresetProbe.h"
 #include "MainComponent.h"
 #include "Theme.h"
 
@@ -9,7 +10,8 @@ public:
     const juce::String getApplicationName() override    { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     // One copy at a time, except the self-test, which can run beside it.
-    bool moreThanOneInstanceAllowed() override          { return getCommandLineParameters().contains ("--fx-selftest"); }
+    bool moreThanOneInstanceAllowed() override          { return getCommandLineParameters().contains ("--fx-selftest")
+                                                                      || getCommandLineParameters().contains ("--preset-probe"); }
 
     void initialise (const juce::String& commandLine) override
     {
@@ -18,6 +20,15 @@ public:
         {
             const juce::File report (commandLine.fromFirstOccurrenceOf ("--fx-selftest", false, false).trim().unquoted());
             report.replaceWithText (FxSelfTest::run());
+            quit();
+            return;
+        }
+
+        // What installed instruments report about their presets; writes a report and quits.
+        if (commandLine.contains ("--preset-probe"))
+        {
+            const juce::File report (commandLine.fromFirstOccurrenceOf ("--preset-probe", false, false).trim().unquoted());
+            report.replaceWithText (PresetProbe::run());
             quit();
             return;
         }

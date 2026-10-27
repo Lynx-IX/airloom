@@ -268,6 +268,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     {
         auto* e = xml->createNewChildElement ("Instrument");
         e->setAttribute ("name", inst.name);
+        e->setAttribute ("label", inst.label);
         e->setAttribute ("fader", inst.faderDb);
         e->setAttribute ("mute", inst.muted);
         e->setAttribute ("recordWithFx", inst.recordWithFx);
@@ -423,6 +424,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
 
         Instrument inst;
         inst.name = e->getStringAttribute ("name");
+        inst.label = e->getStringAttribute ("label");
         inst.faderDb = e->getDoubleAttribute ("fader");
         inst.muted = e->getBoolAttribute ("mute");
         inst.recordWithFx = e->getBoolAttribute ("recordWithFx", true);

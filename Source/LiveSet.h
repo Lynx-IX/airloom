@@ -102,7 +102,8 @@ struct LiveSet
     {
         juce::String pluginXml;        // the plugin's description (which plugin to load)
         juce::String state;            // the plugin's own settings, base64
-        juce::String name;             // shown while the plugin is missing or loading
+        juce::String name;             // the plugin's name, shown while it's missing or loading
+        juce::String label;            // what the performer called it (e.g. the preset); empty = the plugin's name
         double faderDb = 0.0;
         bool muted = false;
         bool recordWithFx = true;

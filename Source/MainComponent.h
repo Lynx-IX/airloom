@@ -15,6 +15,7 @@
 #include "RowView.h"
 #include "SceneBar.h"
 #include "StageView.h"
+#include "PresetName.h"
 #include "SamplePool.h"
 #include "SetRecorder.h"
 #include "StageStatus.h"
@@ -210,6 +211,12 @@ private:
     juce::String nextLoopLabel (const Row& row) const;
     juce::Array<juce::PluginDescription> instrumentTypes() const;
     juce::String instrumentName (int index) const;
+
+    // The preset loaded in each instrument, read from its saved settings (see PresetName):
+    // checked when it loads, when its window closes, and every 2 s while the window is open.
+    std::array<juce::String, LiveSet::maxInstruments> presetNames;
+    juce::uint32 lastPresetCheck = 0;
+    void refreshPresetName (int index);
     juce::String instrumentDetail (int index) const;
 
     // Loop recording

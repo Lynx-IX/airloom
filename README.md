@@ -146,6 +146,13 @@ Hosted instruments sit in the INPUTS section next to Mic and Instrument (up to 4
   Dorian, Hijaz, chromatic) and **octave** from the instrument's menu > *Fire pads*. The pads light up: root notes
   in teal, the other scale notes dim. The Fire's buttons stay free for MIDI-learn (e.g. REC). The MidiMix never
   plays notes.
+- **Preset names:** an instrument's strip is titled with the **preset loaded in it** (e.g. "Flume Pad"), with the
+  plug-in's name moving to the line under it. Airloom reads it from the settings the plug-in saves - it works for
+  Vital and Zyklop (and plug-ins that save a preset name the same way); Serum 2 and Analog Lab don't say, so they show
+  the plug-in's name. It updates when the plug-in's window closes, and every 2 s while it's open.
+- **Rename...** (in its menu) gives an instrument your own name instead - shown on its strip, in the stage view and
+  everywhere else, saved with the set. *Name it after its preset* (or *Use the plug-in's name*) goes back, and
+  changing the instrument clears it.
 - *Play from* (in its menu) limits an instrument to one controller, e.g. the Fire for a pad and the MPK for a lead.
   With **two Fires** (Windows lists the second as "2 - FL STUDIO FIRE") set each instrument to its own Fire to split
   them: each Fire then plays only its instrument and lights its pads in that instrument's key. An instrument left on

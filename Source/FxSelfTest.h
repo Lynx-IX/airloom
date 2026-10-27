@@ -11,6 +11,7 @@
 #include "TempoGuess.h"
 #include "FxPanel.h"
 #include "StageView.h"
+#include "PresetName.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
@@ -1186,6 +1187,38 @@ namespace FxSelfTest
                     }
                 }
             }
+        }
+
+        // ---- Preset names read from instruments' saved settings ----
+        {
+            // As a hosted VST3 wraps it: VST3PluginState XML, the plug-in's own data in base64.
+            auto wrap = [] (const void* data, size_t size)
+            {
+                juce::XmlElement xml ("VST3PluginState");
+                xml.createNewChildElement ("IComponent")->addTextElement (juce::MemoryBlock (data, size).toBase64Encoding());
+                juce::MemoryBlock out;
+                juce::AudioPluginInstance::copyXmlToBinary (xml, out);
+                return out;
+            };
+
+            const juce::String json ("{\"author\":\"Matt\",\"preset_name\":\"Flume Pad\",\"settings\":{}}");
+            const auto vital = PresetName::fromState (wrap (json.toRawUTF8(), json.getNumBytesAsUTF8()));
+
+            // Zyklop: a ValueTree property, PATCH_NAME = "SPACE OF HERE".
+            const juce::uint8 tree[] = { 'x', 0, 'P','A','T','C','H','_','N','A','M','E', 0, 1, 15, 5,
+                                         'S','P','A','C','E',' ','O','F',' ','H','E','R','E', 0, 'P','A','T','C','H','_','F', 0 };
+            const auto zyklop = PresetName::fromState (wrap (tree, sizeof (tree)));
+
+            juce::XmlElement own ("STATE");
+            own.createNewChildElement ("Patch")->setAttribute ("presetName", "Glass Pad");
+            juce::MemoryBlock ownState;
+            juce::AudioPluginInstance::copyXmlToBinary (own, ownState);
+            const auto xmlName = PresetName::fromState (ownState);
+
+            const auto none = PresetName::fromState (wrap ("nothing here", 12));
+            check (vital == "Flume Pad" && zyklop == "SPACE OF HERE" && xmlName == "Glass Pad" && none.isEmpty(),
+                   "Preset names found in saved settings: \"" + vital + "\" (Vital), \"" + zyklop + "\" (Zyklop), \""
+                       + xmlName + "\" (XML)");
         }
 
         // ---- Stage view: drawn with a sample set, saved as a picture to look at ----

@@ -2640,10 +2640,11 @@ void MainComponent::updateSourceStrips()
 
 juce::String MainComponent::instrumentName (int i) const
 {
-    if (auto* plugin = instrumentEngines[(size_t) i]->getPlugin())
-        return plugin->getName();
-
+    // Your own name for it, else the preset loaded in it, else the plug-in's name.
     const auto& inst = liveSet.instruments[(size_t) i];
+    if (auto* plugin = instrumentEngines[(size_t) i]->getPlugin())
+        return inst.label.isNotEmpty() ? inst.label : presetNames[(size_t) i].isNotEmpty() ? presetNames[(size_t) i] : plugin->getName();
+
     if (instrumentLoading[(size_t) i])
         return "Loading " + inst.name + "...";
     return inst.name.isNotEmpty() ? "Missing: " + inst.name : juce::String ("Empty");
@@ -2657,8 +2658,13 @@ juce::String MainComponent::instrumentDetail (int i) const
     layout.scale = inst.padScale;
     layout.octave = inst.padOctave;
 
+    // When the strip shows a preset or your name, the plug-in's name leads the line under it.
+    juce::String plugin;
+    if (auto* p = instrumentEngines[(size_t) i]->getPlugin(); p != nullptr && instrumentName (i) != p->getName())
+        plugin = p->getName() + "  -  ";
+
     const auto from = inst.midiSource.isEmpty() ? juce::String ("All keys") : inst.midiSource;
-    return from + "  -  " + layout.describe() + (inst.recordWithFx ? juce::String() : "  -  dry");
+    return plugin + from + "  -  " + layout.describe() + (inst.recordWithFx ? juce::String() : "  -  dry");
 }
 
 juce::Array<juce::PluginDescription> MainComponent::instrumentTypes() const
@@ -2849,7 +2855,9 @@ void MainComponent::loadInstrumentPlugin (int i, const juce::PluginDescription& 
             auto previous = self->instrumentEngines[(size_t) i]->setPlugin (std::move (instance));
             previous.reset();
 
+            self->presetNames[(size_t) i].clear();
             self->applyInstrument (i);
+            self->refreshPresetName (i);
             self->infoMessage = name + " ready - play it from the Fire's pads or any keyboard";
             self->saveSession();
             self->repaint();
@@ -2878,7 +2886,25 @@ void MainComponent::openEditor (int i)
 
 void MainComponent::closeEditor (int i)
 {
+    const bool wasOpen = editorWindows[(size_t) i] != nullptr;
     editorWindows[(size_t) i].reset();
+    if (wasOpen)
+        refreshPresetName (i);   // a new preset is usually picked in the window
+}
+
+void MainComponent::refreshPresetName (int i)
+{
+    if (! juce::isPositiveAndBelow (i, LiveSet::maxInstruments))
+        return;
+
+    auto* plugin = i < (int) liveSet.instruments.size() ? instrumentEngines[(size_t) i]->getPlugin() : nullptr;
+    const auto name = plugin != nullptr ? PresetName::of (*plugin) : juce::String();
+    if (name != presetNames[(size_t) i])
+    {
+        presetNames[(size_t) i] = name;
+        if (i < (int) liveSet.instruments.size())
+            applyInstrument (i);   // redraws its strip
+    }
 }
 
 void MainComponent::removeInstrument (int i)
@@ -2901,6 +2927,9 @@ void MainComponent::removeInstrument (int i)
     instrumentLoading[(size_t) liveSet.instruments.size() - 1] = false;
 
     liveSet.instruments.erase (liveSet.instruments.begin() + i);
+    for (int j = i; j + 1 < LiveSet::maxInstruments; ++j)
+        presetNames[(size_t) j] = presetNames[(size_t) j + 1];
+    presetNames.back().clear();
     updateSourceStrips();
     for (int j = 0; j < (int) liveSet.instruments.size(); ++j)
         applyInstrument (j);
@@ -2925,6 +2954,10 @@ void MainComponent::showInstrumentMenu (int i)
     juce::PopupMenu change;
     juce::KnownPluginList::addToMenu (change, types, juce::KnownPluginList::sortByManufacturer,
                                       plugin != nullptr ? plugin->getPluginDescription().createIdentifierString() : juce::String());
+    m.addItem (3, "Rename...");
+    if (inst.label.isNotEmpty())
+        m.addItem (4, presetNames[(size_t) i].isNotEmpty() ? "Name it after its preset (" + presetNames[(size_t) i] + ")"
+                                                           : "Use the plug-in's name (" + (plugin != nullptr ? plugin->getName() : inst.name) + ")");
     m.addSubMenu ("Change instrument", change, ! types.isEmpty());
     m.addItem (2, "Scan for plug-ins...");
     m.addSeparator();
@@ -2970,12 +3003,31 @@ void MainComponent::showInstrumentMenu (int i)
 
         if (const int chosen = juce::KnownPluginList::getIndexChosenByMenu (types, r); chosen >= 0)
         {
+            in.label = {};   // a name given to the old instrument doesn't fit the new one
             loadInstrumentPlugin (i, types[chosen], {});
             return;
         }
 
         if (r == 1) openEditor (i);
         if (r == 2) showPluginScanner();
+        if (r == 3)
+        {
+            askText ("Rename instrument", instrumentName (i), [this, i] (juce::String name)
+            {
+                if (i >= (int) liveSet.instruments.size())
+                    return;
+                auto& inst = liveSet.instruments[(size_t) i];
+                auto* plugin = instrumentEngines[(size_t) i]->getPlugin();
+                name = name.trim();
+                // Typing nothing, the plug-in's name or its preset's goes back to naming it automatically.
+                inst.label = name.isEmpty() || (plugin != nullptr && name == plugin->getName()) || name == presetNames[(size_t) i]
+                                 ? juce::String() : name;
+                applyInstrument (i);
+                saveSession();
+            });
+            return;
+        }
+        if (r == 4) in.label = {};
         if (r == 10) in.midiSource = {};
         if (r >= 11 && r < 11 + devices.size()) in.midiSource = devices[r - 11];
         if (r >= 100 && r < 112) in.padRoot = r - 100;
@@ -3026,6 +3078,11 @@ void MainComponent::captureInstrumentStates()
             juce::MemoryBlock data;
             plugin->getStateInformation (data);
             liveSet.instruments[(size_t) i].state = data.toBase64Encoding();
+            if (const auto preset = PresetName::fromState (data); preset.isNotEmpty() && preset != presetNames[(size_t) i])
+            {
+                presetNames[(size_t) i] = preset;
+                applyInstrument (i);
+            }
         }
     }
 
@@ -4995,6 +5052,14 @@ void MainComponent::timerCallback()
     updateRecordSetButton();
     updateMuteButton();
     updatePerfMeter();
+
+    if (juce::Time::getMillisecondCounter() - lastPresetCheck > 2000)
+    {
+        lastPresetCheck = juce::Time::getMillisecondCounter();
+        for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
+            if (editorWindows[(size_t) i] != nullptr)
+                refreshPresetName (i);
+    }
     watchAudioDevice();
 
     {
