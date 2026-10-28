@@ -2,23 +2,43 @@
 
 #include <JuceHeader.h>
 
-// Dark, high-contrast palette meant to be readable at a glance on a dim stage.
+// Dark, high-contrast palettes meant to be readable at a glance on a dim stage.
 // Surfaces step up in brightness: background < panel < raised < panelEdge.
+// The colours below are the current theme's; switchTo() changes them (Set > Theme).
 namespace Theme
 {
-    inline const juce::Colour background  { 0xff0b0c0f };
-    inline const juce::Colour panel       { 0xff15171c };
-    inline const juce::Colour raised      { 0xff1d2027 };
-    inline const juce::Colour panelEdge   { 0xff2c3039 };
-    inline const juce::Colour text        { 0xffeceef2 };
-    inline const juce::Colour textDim     { 0xff8d93a0 };
-    inline const juce::Colour accent      { 0xff4fd1b5 };   // calm teal: playing / OK
-    inline const juce::Colour warn        { 0xfff2b54e };   // amber: attention
-    inline const juce::Colour danger      { 0xffff5d5d };   // red: clipping / armed
+    struct Palette
+    {
+        const char* name;
+        juce::uint32 background, panel, raised, panelEdge, text, textDim, accent, warn, danger;
+        float groupBrightness;   // group colours are scaled by this (dimmer for Night)
+    };
 
-    // Row colours: soft, distinct hues that stay readable on the dark background.
+    constexpr int numPalettes = 6;
+    inline const Palette palettes[numPalettes] {
+        { "Graphite",      0xff0b0c0f, 0xff15171c, 0xff1d2027, 0xff2c3039, 0xffeceef2, 0xff8d93a0, 0xff4fd1b5, 0xfff2b54e, 0xffff5d5d, 1.0f },
+        { "Midnight",      0xff0a0d16, 0xff121828, 0xff1a2236, 0xff2a3550, 0xffe8eefa, 0xff8794b0, 0xff6cb6ff, 0xfff2b54e, 0xffff6070, 1.0f },
+        { "Ember",         0xff100b09, 0xff1b1411, 0xff241b17, 0xff3a2c25, 0xfff4ebe4, 0xffa39283, 0xffe9915e, 0xfff5cf57, 0xffff5d5d, 1.0f },
+        { "Forest",        0xff090d0b, 0xff121a16, 0xff19231e, 0xff293a31, 0xffe9f2ec, 0xff8a9d91, 0xff7fd18b, 0xfff2b54e, 0xffff6b5d, 1.0f },
+        { "Night",         0xff050506, 0xff0c0d10, 0xff131519, 0xff1f2228, 0xffb9bdc6, 0xff6b707b, 0xff3c9f8a, 0xffc28f3e, 0xffcc4a4a, 0.72f },
+        { "High contrast", 0xff020202, 0xff0e0e0e, 0xff1e1e1e, 0xff4c4c4c, 0xfffdfdfd, 0xffc8c8c8, 0xff3dffd2, 0xffffc233, 0xffff4545, 1.12f },
+    };
+
+    inline int currentPalette = 0;
+
+    inline juce::Colour background  { palettes[0].background };
+    inline juce::Colour panel       { palettes[0].panel };
+    inline juce::Colour raised      { palettes[0].raised };
+    inline juce::Colour panelEdge   { palettes[0].panelEdge };
+    inline juce::Colour text        { palettes[0].text };
+    inline juce::Colour textDim     { palettes[0].textDim };
+    inline juce::Colour accent      { palettes[0].accent };   // calm teal: playing / OK
+    inline juce::Colour warn        { palettes[0].warn };     // amber: attention
+    inline juce::Colour danger      { palettes[0].danger };   // red: clipping / armed
+
+    // Group colours: soft, distinct hues that stay readable on the dark background.
     constexpr int numRowColours = 8;
-    inline const juce::Colour rowColours[numRowColours] {
+    inline const juce::Colour baseRowColours[numRowColours] {
         juce::Colour (0xff9d8cff),   // violet
         juce::Colour (0xffa6d160),   // green
         juce::Colour (0xff5eaef0),   // blue
@@ -28,6 +48,48 @@ namespace Theme
         juce::Colour (0xfff08c5c),   // coral
         juce::Colour (0xffd2bd8c),   // sand
     };
+    inline juce::Colour rowColours[numRowColours] {
+        baseRowColours[0], baseRowColours[1], baseRowColours[2], baseRowColours[3],
+        baseRowColours[4], baseRowColours[5], baseRowColours[6], baseRowColours[7],
+    };
+
+    inline int paletteIndex (const juce::String& name)
+    {
+        for (int i = 0; i < numPalettes; ++i)
+            if (name.equalsIgnoreCase (palettes[i].name))
+                return i;
+        return 0;
+    }
+
+    // Every theme colour, in a fixed order (to map one theme's colours onto another's).
+    inline std::vector<juce::Colour> allColours()
+    {
+        std::vector<juce::Colour> all { background, panel, raised, panelEdge, text, textDim, accent, warn, danger };
+        all.insert (all.end(), std::begin (rowColours), std::end (rowColours));
+        return all;
+    }
+
+    // Sets the colours above. Components built afterwards pick them up; switchTo() also
+    // recolours what's already on screen.
+    inline void applyPalette (int index)
+    {
+        currentPalette = juce::jlimit (0, numPalettes - 1, index);
+        const auto& p = palettes[currentPalette];
+        background = juce::Colour (p.background);
+        panel = juce::Colour (p.panel);
+        raised = juce::Colour (p.raised);
+        panelEdge = juce::Colour (p.panelEdge);
+        text = juce::Colour (p.text);
+        textDim = juce::Colour (p.textDim);
+        accent = juce::Colour (p.accent);
+        warn = juce::Colour (p.warn);
+        danger = juce::Colour (p.danger);
+
+        for (int i = 0; i < numRowColours; ++i)
+            rowColours[i] = p.groupBrightness > 1.0f
+                          ? baseRowColours[i].withMultipliedSaturation (p.groupBrightness).withMultipliedBrightness (p.groupBrightness)
+                          : baseRowColours[i].withMultipliedBrightness (p.groupBrightness);
+    }
     inline const char* const rowColourNames[numRowColours] {
         "Violet", "Green", "Blue", "Amber", "Rose", "Teal", "Coral", "Sand"
     };
@@ -115,7 +177,12 @@ namespace Theme
         {
             // Segoe UI ships with every copy of Windows 10 and 11, so the laptop looks the same.
             setDefaultSansSerifTypefaceName ("Segoe UI");
+            refreshColours();
+        }
 
+        // Takes the current theme's colours.
+        void refreshColours()
+        {
             setColourScheme ({ background, panel, raised, panelEdge, text, accent,
                                background, accent, text });
 
@@ -425,4 +492,59 @@ namespace Theme
             g.strokePath (path, juce::PathStrokeType (1.0f));
         }
     };
+
+    // Changes theme while running: new colours, the look-and-feel's defaults, and every
+    // colour a component on screen was given from the old theme (matched by RGB, keeping
+    // its transparency) moves to the new theme's colour in the same role.
+    inline void recolour (juce::Component& c, const std::vector<juce::Colour>& from, const std::vector<juce::Colour>& to)
+    {
+        const auto& props = c.getProperties();
+        std::vector<std::pair<int, juce::Colour>> changes;
+
+        for (int i = 0; i < props.size(); ++i)
+        {
+            const auto name = props.getName (i).toString();
+            if (! name.startsWith ("jcclr_"))
+                continue;
+
+            const auto colour = juce::Colour ((juce::uint32) (int) props.getValueAt (i));
+            for (size_t k = 0; k < from.size(); ++k)
+                if ((colour.getARGB() & 0x00ffffff) == (from[k].getARGB() & 0x00ffffff))
+                {
+                    changes.push_back ({ (int) name.substring (6).getHexValue32(), to[k].withAlpha (colour.getAlpha()) });
+                    break;
+                }
+        }
+
+        for (const auto& [id, colour] : changes)
+            c.setColour (id, colour);
+
+        for (auto* child : c.getChildren())
+            recolour (*child, from, to);
+    }
+
+    // Called after a theme change (the app uses it to colour the window's title bar).
+    inline std::function<void()> onSwitched;
+
+    inline void switchTo (int index)
+    {
+        const auto from = allColours();
+        applyPalette (index);
+        const auto to = allColours();
+
+        if (auto* lf = dynamic_cast<LookAndFeel*> (&juce::LookAndFeel::getDefaultLookAndFeel()))
+            lf->refreshColours();
+
+        auto& desktop = juce::Desktop::getInstance();
+        for (int i = 0; i < desktop.getNumComponents(); ++i)
+            if (auto* top = desktop.getComponent (i))
+            {
+                recolour (*top, from, to);
+                top->sendLookAndFeelChange();
+                top->repaint();
+            }
+
+        if (onSwitched)
+            onSwitched();
+    }
 }

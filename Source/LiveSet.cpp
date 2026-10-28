@@ -218,6 +218,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
         re->setAttribute ("fader", r.faderDb);
         re->setAttribute ("mute", r.muted);
         re->setAttribute ("columns", r.columns);
+        re->setAttribute ("collapsed", r.collapsed);
         re->setAttribute ("uid", r.uid);
         re->setAttribute ("x", r.position.x);
         re->setAttribute ("y", r.position.y);
@@ -349,6 +350,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
         r.faderDb = re->getDoubleAttribute ("fader", 0.0);
         r.muted = re->getBoolAttribute ("mute");
         r.columns = juce::jmax (0, re->getIntAttribute ("columns", 0));
+        r.collapsed = re->getBoolAttribute ("collapsed", false);
         r.uid = re->getStringAttribute ("uid", r.uid);
         r.position = { re->getIntAttribute ("x", -1), re->getIntAttribute ("y", -1) };
         r.fx = FxSettings::fromXml (re->getChildByName ("Fx"));

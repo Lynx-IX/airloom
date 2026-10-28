@@ -11,8 +11,8 @@ Rig: any audio interface (Scarlett 2i2 on the laptop, MOTU at home), Akai MidiMi
 | Stage | Scope | Status |
 |---|---|---|
 | 1 | Window, audio device, one seamless WAV loop, transport + level meter | done |
-| 2 | Rows of channels (loops, XF auto crossfade, one-shots), per-channel and per-row volume, MidiMix, sets | **done - test on the rig** |
-| 3 | Mic and instrument input channels; low cut, delay and reverb on inputs and on every row | **done - test on the rig** |
+| 2 | Groups of channels (loops, XF auto crossfade, one-shots), per-channel and per-group volume, MidiMix, sets | **done - test on the rig** |
+| 3 | Mic and instrument input channels; low cut, delay and reverb on inputs and on every group | **done - test on the rig** |
 | 4 | VST3 instrument hosting; Akai Fire pads as a scale keyboard with lit scale | **done - test on the rig** |
 | 5 | Loop recording from live inputs (with or without effects), overdub, undo, length snapping | **done - test on the rig** |
 
@@ -45,13 +45,13 @@ it's installed; writes a pass/fail report; can run while the app is open):
  SAMPLES   | PADS       [row vol][mute] | [E maj warm  ] [A min soft  ] [C maj airy ] [+]  | MASTER
  (all your |                            | [PLAY ][XF]    [STOP ][XF]    [PLAY ][XF]        |
   loaded   |                            | [--volume--]   [--volume--]   [--volume--]       |
-  samples) | AMBIENT    [row vol][mute] | [Rain] [Stream] [Birds] [+]                        |
-           | TONES      [row vol][mute] | [Alpha 10Hz] [Theta 6Hz] [+]                       |
-           | ONE-SHOTS  [row vol][mute] | [Bowl 1x] [Chime 1x] [Gong 1x] [+]                 |
+  samples) | AMBIENT    [grp vol][mute] | [Rain] [Stream] [Birds] [+]                        |
+           | TONES      [grp vol][mute] | [Alpha 10Hz] [Theta 6Hz] [+]                       |
+           | ONE-SHOTS  [grp vol][mute] | [Bowl 1x] [Chime 1x] [Gong 1x] [+]                 |
 ```
 
 - **Samples panel (left):** drop audio files or whole folders on it, or use Add files / Add folder. Everything you
-  load for the set lives here. Each sample shows which rows use it.
+  load for the set lives here. Each sample shows which groups use it.
 - **Groups** (the Inputs among them) can go anywhere: **drag a group by its name** and drop it - an outline
   shows where it lands, and groups settle up under whatever is above them, so gaps beside a tall group fill in. Drag
   a group's **right edge** to set how many columns its grid has (6 channels as 6x1, 3x2, 2x3...); double-click the
@@ -59,33 +59,40 @@ it's installed; writes a pass/fail report; can run while the app is open):
   samples list into a thin strip to give the groups more room (click the strip to open it again).
 - Each group is a layer, with its own volume fader, meter and mute on the left. A new set starts with Pads,
   Ambient, Tones and One-shots. Click a group's name to rename it, recolour it, remove it, or add a channel.
-  **+ ROW** adds one (up to 8).
+  **+ GROUP** adds one (up to 8).
+- **Collapse a group** with the arrow by its name (or *Collapse* in its name menu; *Collapse all groups* /
+  *Expand all groups* do every group). A collapsed group is a short bar: its name, MUTE and FX, and a tile per
+  channel that lights while it plays - click a tile to play or stop it, right-click for its menu. The group fader
+  and MidiMix keep working. The set remembers which groups are collapsed.
 - **Channels** each hold one sample with its own volume. Drag samples from the panel (or straight from Explorer) onto
-  a channel, or onto a row to fill its empty channels. **+** at the end of a row adds a channel. Click a channel's
+  a channel, or onto a group to fill its empty channels. **+** at the end of a group adds a channel. Click a channel's
   name (or right-click it) to load, rename, switch between Loop and Play once, move, clear or remove it.
-- **Drag a channel** (by its name or background) to reorder it within its row or move it to another row; a line in
-  the row's colour shows where it will land. A playing loop keeps playing when reordered; moved to another row, it
+- **Drag a channel** (by its name or background) to reorder it within its group or move it to another group; a line in
+  the group's colour shows where it will land. A playing loop keeps playing when reordered; moved to another group, it
   fades out and back in there.
 
 ## Playing
 
-- **PLAY / STOP** fades a loop in or out over the **Fade time**. Loops in the same row play together.
-- **XF** (auto crossfade) fades that channel in while every other loop in the row fades out over the fade time.
+- **PLAY / STOP** fades a loop in or out over the **Fade time**. Loops in the same group play together.
+- **XF** (auto crossfade) fades that channel in while every other loop in the group fades out over the fade time.
 - For a **manual crossfade**, move the channel faders yourself. Each channel is a mixer strip with its own vertical
-  fader and level meter; the row's fader and meter sit at the left of the row.
-- **One-shots** (marked `1x`) play once on top of everything; each has its own volume, plus the row's fader.
+  fader and level meter; the group's fader and meter sit at the left of the group.
+- **One-shots** (marked `1x`) play once on top of everything; each has its own volume, plus the group's fader.
 - **Channel FX:** every channel (loops, live loops, one-shots) has its own **FX** button with the full effects chain,
-  applied before the row's FX. Up to 6 channels per row can have their own effects at once; tails ring out after a
-  channel stops. The button lights in the row's colour when something's on.
+  applied before the group's FX. Up to 6 channels per group can have their own effects at once; tails ring out after a
+  channel stops. The button lights in the group's colour when something's on.
 - **Reverse:** a channel's menu > **Play reversed** flips the sample (it crossfades over if playing). The channel
   shows `REV`. Works with smooth loop points and overdubs; recorded files stay forwards on disk.
 - **Samples that aren't cut as loops:** click the channel name > **Smooth loop point** and pick a blend time
   (0.5-8 s). The end of the sample is blended into its start so it repeats without a jump; the channel shows `~`.
   Longer blends are smoother but shorten the loop by that much (at most a third of the sample).
-- Each row has its own **colour** (change it from the row name menu). A playing channel lights up in its row's
+- Each group has its own **colour** (change it from the group name menu). A playing channel lights up in its group's
   colour; amber means fading in or loading.
 - The window resizes freely. **Ctrl +** / **Ctrl -** zoom the whole interface, **Ctrl 0** resets (also in the Set
   menu); the zoom is remembered.
+- **Set > Theme** changes the colours straight away: **Graphite** (the original), **Midnight** (blue), **Ember** (warm),
+  **Forest** (green), **Night** (dimmer everything, for a dark room) and **High contrast** (brighter text and edges, for
+  bright stage light or daylight). Group colours stay the same hues. The theme is remembered on this computer.
 - **STOP ALL** fades everything out over the fade time. **Esc** is a quick 1.5 s panic fade.
 - Samples are loaded into memory in the background as soon as they're on a button, so presses respond instantly.
 
@@ -112,8 +119,8 @@ it's installed; writes a pass/fail report; can run while the app is open):
   the built-in chain. *Open ...* in the same menu shows its window (set its key there to match the flute: A minor,
   Bb or E). It's saved with the set, included in recordings made with effects and left out of dry ones. The input
   shows the plug-in's name under its own.
-- **Every row has an FX button too**, with the same chain applied to everything playing in that row (before the
-  row fader). The FX button lights in the row's colour when any effect is on. Reverb and delay tails ring out after a
+- **Every group has an FX button too**, with the same chain applied to everything playing in that group (before the
+  group fader). The FX button lights in the group's colour when any effect is on. Reverb and delay tails ring out after a
   channel stops.
 - **Beat lights:** four lights next to BPM (and in the looper) pulse in time, one per beat of the bar, beat 1
   outlined brighter. TAP sets where beat 1 falls. While recording, the looper's lights turn red and count from the
@@ -377,10 +384,10 @@ to assign a MIDI button.
 
 ## Sets
 
-Everything - samples, rows, channels, volumes, mutes, effects, input settings, fade time - is a **set**. The working session is
+Everything - samples, groups, channels, volumes, mutes, effects, input settings, fade time - is a **set**. The working session is
 saved automatically, so the app reopens exactly where you left off.
 
-- **Set > Save set as new folder...** creates a folder and gathers every sample into it - one subfolder per row,
+- **Set > Save set as new folder...** creates a folder and gathers every sample into it - one subfolder per group,
   plus `Samples/` for anything not on a channel. You choose to **copy** (originals stay put) or **move** the files.
   Paths inside are relative, so the whole folder can be copied to another computer.
 - **Set > Save set** updates it; **Set > Open set...** opens a `.liverig`.

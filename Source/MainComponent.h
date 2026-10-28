@@ -36,6 +36,9 @@ public:
     // Shown when the window opens: e.g. that the last run ended unexpectedly (see CrashLog).
     static inline juce::String startupWarning;
 
+    // Where this computer's settings are kept (also read at startup for the theme).
+    static juce::PropertiesFile::Options settingsOptions();
+
     void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override;
     void releaseResources() override;
@@ -140,6 +143,9 @@ private:
     void updateRowViews();
     void addRow (std::function<void (int)> then = {});
     void showRowMenu (int row);
+    void setTheme (int index);
+    void toggleCollapsed (int row);
+    void setAllCollapsed (bool collapse);
     void removeRow (int row);
     void addChannel (int row);
     void showChannelMenu (int row, int slot);
@@ -394,7 +400,7 @@ private:
     InputsView inputsView;
     LooperBar looperBar;
     juce::OwnedArray<RowView> rowViews;
-    juce::TextButton addRowButton { "+ ROW" };
+    juce::TextButton addRowButton { "+ GROUP" };
     ChannelStrip masterStrip { "Master", false };
     RightClickable<juce::TextButton> stopAllButton { "STOP ALL" };
     RightClickable<juce::TextButton> freezeButton { "FREEZE" };

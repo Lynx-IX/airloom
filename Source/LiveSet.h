@@ -66,6 +66,7 @@ struct LiveSet
         double faderDb = 0.0;
         bool muted = false;
         int columns = 0;               // grid width in channels; 0 = automatic (one line)
+        bool collapsed = false;        // shown as a short bar of channel tiles
         juce::Point<int> position { -1, -1 };   // where the group was placed; -1 = not placed yet
         juce::String uid = newUid();   // what MIDI assignments refer to
         FxSettings fx;

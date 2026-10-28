@@ -21,7 +21,9 @@ public:
         if (commandLine.contains ("--fx-selftest"))
         {
             const juce::File report (commandLine.fromFirstOccurrenceOf ("--fx-selftest", false, false).trim().unquoted());
+            juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);   // so its pictures look like the app
             report.replaceWithText (FxSelfTest::run());
+            juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
             quit();
             return;
         }
@@ -48,12 +50,20 @@ public:
         MainComponent::startupWarning = CrashLog::previousRunProblem();
         running = true;
 
+        // The theme is picked before any window is built, so everything starts in it.
+        {
+            juce::PropertiesFile props (MainComponent::settingsOptions());
+            Theme::applyPalette (Theme::paletteIndex (props.getValue ("theme")));
+            lookAndFeel.refreshColours();
+        }
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         mainWindow = std::make_unique<MainWindow> (getApplicationName() + " - Audio Performance Rig");
+        Theme::onSwitched = [this] { if (mainWindow != nullptr) mainWindow->tintTitleBar(); };
     }
 
     void shutdown() override
     {
+        Theme::onSwitched = nullptr;
         mainWindow = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
         if (running)
@@ -83,6 +93,36 @@ public:
                 centreWithSize (getWidth(), getHeight());
 
             setVisible (true);
+            tintTitleBar();
+        }
+
+        // Windows draws the title bar; on Windows 11 it can take the theme's colours
+        // (a shade darker than the window), and on 10 it at least goes dark.
+        void tintTitleBar()
+        {
+            auto* hwnd = (HWND) getWindowHandle();
+            if (hwnd == nullptr)
+                return;
+
+            using SetAttribute = HRESULT (WINAPI*) (HWND, DWORD, LPCVOID, DWORD);
+            static auto* setAttribute = []() -> SetAttribute
+            {
+                if (auto* dwm = LoadLibraryW (L"dwmapi.dll"))
+                    return (SetAttribute) GetProcAddress (dwm, "DwmSetWindowAttribute");
+                return nullptr;
+            }();
+            if (setAttribute == nullptr)
+                return;
+
+            auto colorRef = [] (juce::Colour c) { return (DWORD) RGB (c.getRed(), c.getGreen(), c.getBlue()); };
+            const auto caption = Theme::background.interpolatedWith (juce::Colours::black, 0.35f);
+            const BOOL dark = TRUE;
+            const DWORD captionColour = colorRef (caption), textColour = colorRef (Theme::text), borderColour = colorRef (Theme::panelEdge);
+
+            setAttribute (hwnd, 20, &dark, sizeof (dark));                         // DWMWA_USE_IMMERSIVE_DARK_MODE
+            setAttribute (hwnd, 35, &captionColour, sizeof (captionColour));       // DWMWA_CAPTION_COLOR
+            setAttribute (hwnd, 36, &textColour, sizeof (textColour));             // DWMWA_TEXT_COLOR
+            setAttribute (hwnd, 34, &borderColour, sizeof (borderColour));         // DWMWA_BORDER_COLOR
         }
 
         void closeButtonPressed() override

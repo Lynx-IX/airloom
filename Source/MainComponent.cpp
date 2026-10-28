@@ -106,12 +106,7 @@ namespace
 
 MainComponent::MainComponent()
 {
-    juce::PropertiesFile::Options options;
-    options.applicationName = "LiveRig";
-    options.filenameSuffix = ".settings";
-    options.folderName = "LiveRig";
-    options.osxLibrarySubFolder = "Application Support";
-    settings.setStorageParameters (options);
+    settings.setStorageParameters (settingsOptions());
     auto* props = settings.getUserSettings();
 
     formatManager.registerBasicFormats();
@@ -655,6 +650,24 @@ void MainComponent::releaseResources()
 }
 
 //==============================================================================
+juce::PropertiesFile::Options MainComponent::settingsOptions()
+{
+    juce::PropertiesFile::Options options;
+    options.applicationName = "LiveRig";
+    options.filenameSuffix = ".settings";
+    options.folderName = "LiveRig";
+    options.osxLibrarySubFolder = "Application Support";
+    return options;
+}
+
+void MainComponent::setTheme (int index)
+{
+    Theme::switchTo (index);
+    settings.getUserSettings()->setValue ("theme", Theme::palettes[Theme::currentPalette].name);
+    updateRowViews();
+    repaint();
+}
+
 void MainComponent::showSetMenu()
 {
     const bool saved = liveSet.file.existsAsFile();
@@ -674,6 +687,11 @@ void MainComponent::showSetMenu()
     m.addItem (7, "Zoom out   (Ctrl -)");
     m.addItem (8, "Actual size   (Ctrl 0)");
 
+    juce::PopupMenu themes;
+    for (int i = 0; i < Theme::numPalettes; ++i)
+        themes.addItem (200 + i, Theme::palettes[i].name, true, i == Theme::currentPalette);
+    m.addSubMenu ("Theme", themes);
+
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&setButton), [this] (int r)
     {
         const float scale = juce::Desktop::getInstance().getGlobalScaleFactor();
@@ -687,6 +705,7 @@ void MainComponent::showSetMenu()
         if (r == 6) setZoom (scale + 0.1f);
         if (r == 7) setZoom (scale - 0.1f);
         if (r == 8) setZoom (1.0f);
+        if (r >= 200 && r < 200 + Theme::numPalettes) setTheme (r - 200);
     });
 }
 
@@ -1761,7 +1780,7 @@ void MainComponent::rebuildRows()
 
                 if (! engineFor (*rw).setOwnerFx (id, fx))
                 {
-                    errorMessage = "Up to " + juce::String (LoopChannel::numChannelFx) + " channels per row can have their own effects - "
+                    errorMessage = "Up to " + juce::String (LoopChannel::numChannelFx) + " channels per group can have their own effects - "
                                    "turn them off on another channel in " + rw->name;
                     repaint();
                     return;
@@ -1794,6 +1813,7 @@ void MainComponent::rebuildRows()
         view->onDub = [this, i] (int s) { channelDubPressed (i, s); };
         view->onMenu = [this, i] (int s) { showChannelMenu (i, s); };
         view->onHeaderMenu = [this, i] { showRowMenu (i); };
+        view->onToggleCollapsed = [this, i] { toggleCollapsed (i); };
         view->onAddChannel = [this, i] { addChannel (i); };
         view->onLayoutChanged = [this] { layoutRows(); };
         view->resizer.onColumnsChanged = [this, i] (int columns)
@@ -1864,7 +1884,7 @@ std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, ju
     {
         return item < 0 ? InputsView::preferredSize (inputsView.getNumStrips(), width, liveSet.inputsColumns)
                         : RowView::preferredSize ((int) liveSet.rows[(size_t) item].slots.size(), width,
-                                                  liveSet.rows[(size_t) item].columns);
+                                                  liveSet.rows[(size_t) item].columns, liveSet.rows[(size_t) item].collapsed);
     };
 
     groups.push_back ({ -1, liveSet.inputsPosition, sizeOf (-1) });
@@ -1991,12 +2011,12 @@ void MainComponent::addRow (std::function<void (int)> then)
 {
     if ((int) liveSet.rows.size() >= LiveSet::maxRows)
     {
-        errorMessage = "Up to " + juce::String (LiveSet::maxRows) + " rows, one per MidiMix fader";
+        errorMessage = "Up to " + juce::String (LiveSet::maxRows) + " groups, one per MidiMix fader";
         repaint();
         return;
     }
 
-    askText ("Name the new row", "Row " + juce::String ((int) liveSet.rows.size() + 1), [this, then] (juce::String name)
+    askText ("Name the new group", "Group " + juce::String ((int) liveSet.rows.size() + 1), [this, then] (juce::String name)
     {
         const int engine = freeEngine();
         if (engine < 0)
@@ -2022,12 +2042,36 @@ int MainComponent::freeEngine() const
     return -1;
 }
 
+void MainComponent::toggleCollapsed (int row)
+{
+    if (! juce::isPositiveAndBelow (row, (int) liveSet.rows.size()))
+        return;
+
+    liveSet.rows[(size_t) row].collapsed = ! liveSet.rows[(size_t) row].collapsed;
+    updateRowViews();
+    layoutRows();
+    saveSession();
+}
+
+void MainComponent::setAllCollapsed (bool collapse)
+{
+    for (auto& r : liveSet.rows)
+        r.collapsed = collapse;
+    updateRowViews();
+    layoutRows();
+    saveSession();
+}
+
 void MainComponent::showRowMenu (int row)
 {
     const auto& r = liveSet.rows[(size_t) row];
 
     juce::PopupMenu m;
     m.addSectionHeader (r.name);
+    m.addItem (8, r.collapsed ? "Expand" : "Collapse");
+    m.addItem (9, "Collapse all groups");
+    m.addItem (10, "Expand all groups");
+    m.addSeparator();
     m.addItem (1, "Rename...");
     m.addItem (2, "Add a channel");
     m.addItem (3, "New channels play once", true, r.newSlotsOneShot);
@@ -2039,7 +2083,7 @@ void MainComponent::showRowMenu (int row)
 
     m.addItem (7, r.insert.isEmpty() ? juce::String ("Plug-in effect...") : "Plug-in effect: " + r.insert.name + "...");
     m.addSeparator();
-    m.addItem (6, "Remove row");
+    m.addItem (6, "Remove group");
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (rowViews[row]), [this, row] (int choice)
     {
@@ -2049,7 +2093,7 @@ void MainComponent::showRowMenu (int row)
         auto& rw = liveSet.rows[(size_t) row];
 
         if (choice == 1)
-            askText ("Rename row", rw.name, [this, row] (juce::String name)
+            askText ("Rename group", rw.name, [this, row] (juce::String name)
             {
                 if (row < (int) liveSet.rows.size())
                 {
@@ -2062,6 +2106,8 @@ void MainComponent::showRowMenu (int row)
 
         if (choice == 2) addChannel (row);
         if (choice == 7) showInsertMenu ("grp." + rw.uid, *rowViews[row]);
+        if (choice == 8) toggleCollapsed (row);
+        if (choice == 9 || choice == 10) setAllCollapsed (choice == 9);
 
         if (choice == 3)
         {
@@ -2083,7 +2129,7 @@ void MainComponent::showRowMenu (int row)
             if (! hasSamples)
                 removeRow (row);
             else
-                askChoice ("Remove row", "Remove " + rw.name + " and its channels? The samples stay in the Samples list.",
+                askChoice ("Remove group", "Remove " + rw.name + " and its channels? The samples stay in the Samples list.",
                            { "Remove", "Cancel" }, [this, row] (int c) { if (c == 1) removeRow (row); });
         }
     });
@@ -4673,7 +4719,7 @@ void MainComponent::moveChannelTo (int slotId, int targetRow, int targetIndex)
         engineFor (liveSet.rows[(size_t) sourceRow]).setOwnerFx (moving.id, {});
         if (! engineFor (liveSet.rows[(size_t) targetRow]).setOwnerFx (moving.id, moving.fx))
             errorMessage = "No room for this channel's own effects in " + liveSet.rows[(size_t) targetRow].name
-                         + " (" + juce::String (LoopChannel::numChannelFx) + " per row)";
+                         + " (" + juce::String (LoopChannel::numChannelFx) + " per group)";
     }
 
     auto slot = std::move (from[(size_t) sourceIndex]);

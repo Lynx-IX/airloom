@@ -1408,6 +1408,114 @@ namespace FxSelfTest
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (strip, out), "Channel cards drawn to " + file.getFullPathName());
         }
 
+        // ---- Groups collapse to a short bar of tiles, and stay collapsed in the saved set ----
+        {
+            auto row = LiveSet::makeRow ("Ambient", false, 5);
+            row.colour = 1;
+            const char* names[] = { "Birds", "Water lapping", "Rain", "Whale song", nullptr };
+            for (int i = 0; i < 4; ++i)
+            {
+                row.slots[(size_t) i].file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile (juce::String (names[i]) + ".wav");
+                row.slots[(size_t) i].label = names[i];
+            }
+            row.slots[0].playing = true;
+            row.slots[2].playing = true;
+
+            RowView view;
+            auto draw = [&] (bool collapse)
+            {
+                row.collapsed = collapse;
+                view.update (row, [] (int) { return false; }, [] (int) { return ChannelCard::State::idle; }, 0);
+                const auto size = RowView::preferredSize ((int) row.slots.size(), 1400, 0, collapse);
+                view.setBounds (0, 0, size.x, size.y);
+                return view.createComponentSnapshot (view.getLocalBounds());
+            };
+
+            const auto open = draw (false);
+            const auto shut = draw (true);
+            check (shut.getHeight() <= RowView::collapsedHeight && shut.getWidth() == open.getWidth() && open.getHeight() > 150,
+                   "A collapsed group is a short bar the same width (" + juce::String (shut.getHeight()) + " vs "
+                   + juce::String (open.getHeight()) + " px tall)");
+
+            bool tilesOnly = view.getChannelCard (0) != nullptr && view.getChannelCard (0)->getHeight() == RowView::tileHeight
+                          && ! view.getChannelCard (0)->getVolumeSlider().isVisible() && view.strip.muteButton.isVisible()
+                          && ! view.strip.fader.isVisible();
+            check (tilesOnly, "Collapsed: channels become tiles, the group keeps MUTE but hides its fader");
+
+            LiveSet set;
+            set.rows.push_back (row);
+            LiveSet back;
+            back.loadFromXml (*set.toXml ({}), {});
+            check (! back.rows.empty() && back.rows.back().collapsed, "Collapsed groups stay collapsed in the saved set");
+
+            juce::Image both (juce::Image::ARGB, open.getWidth(), open.getHeight() + shut.getHeight() + 10, true);
+            {
+                juce::Graphics g (both);
+                g.fillAll (Theme::background);
+                g.drawImageAt (open, 0, 0);
+                g.drawImageAt (shut, 0, open.getHeight() + 10);
+            }
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-groups.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (both, out), "Groups drawn to " + file.getFullPathName());
+        }
+
+        // ---- Themes: switching recolours what's on screen; every theme drawn to a picture ----
+        {
+            juce::TextButton button;
+            button.setColour (juce::TextButton::buttonColourId, Theme::raised);
+            button.setColour (juce::TextButton::textColourOffId, Theme::textDim.withAlpha (0.5f));
+            button.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff123456));
+            const auto from = Theme::allColours();
+            Theme::applyPalette (Theme::paletteIndex ("Ember"));
+            Theme::recolour (button, from, Theme::allColours());
+            check (button.findColour (juce::TextButton::buttonColourId) == Theme::raised
+                   && button.findColour (juce::TextButton::textColourOffId) == Theme::textDim.withAlpha (0.5f)
+                   && button.findColour (juce::TextButton::buttonOnColourId) == juce::Colour (0xff123456),
+                   "Switching theme recolours controls (keeping transparency) and leaves other colours alone");
+            check (Theme::paletteIndex ("night") == 4 && Theme::paletteIndex ("nonsense") == 0, "Themes are found by name, unknown ones fall back to Graphite");
+
+            auto row = LiveSet::makeRow ("Ambient", false, 4);
+            row.colour = 1;
+            const char* names[] = { "Birds", "Water lapping", "Rain" };
+            for (int i = 0; i < 3; ++i)
+            {
+                row.slots[(size_t) i].file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile (juce::String (names[i]) + ".wav");
+                row.slots[(size_t) i].label = names[i];
+            }
+            row.slots[0].playing = true;
+
+            const auto size = RowView::preferredSize ((int) row.slots.size(), 1400);
+            const int label = 22;
+            juce::Image sheet (juce::Image::ARGB, size.x, Theme::numPalettes * (size.y + label), true);
+
+            for (int t = 0; t < Theme::numPalettes; ++t)
+            {
+                Theme::switchTo (t);
+                RowView view;
+                view.update (row, [] (int) { return false; }, [] (int) { return ChannelCard::State::idle; }, 0);
+                view.setBounds (0, 0, size.x, size.y);
+                view.getChannelCard (2)->setDubState (false, true);
+                const auto snap = view.createComponentSnapshot (view.getLocalBounds());
+
+                juce::Graphics g (sheet);
+                const int y = t * (size.y + label);
+                g.setColour (Theme::background);
+                g.fillRect (0, y, size.x, size.y + label);
+                g.setColour (Theme::text);
+                g.setFont (Theme::heading (13.0f));
+                g.drawText (Theme::palettes[t].name, 8, y, size.x, label, juce::Justification::centredLeft);
+                g.drawImageAt (snap, 0, y + label);
+            }
+            Theme::switchTo (0);
+
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-themes.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (sheet, out), "Themes drawn to " + file.getFullPathName());
+        }
+
         report.add ({});
         report.add (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED");
         return report.joinIntoString ("\n");

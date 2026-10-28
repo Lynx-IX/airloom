@@ -25,6 +25,18 @@ public:
 
     juce::Slider& getVolumeSlider()   { return volume; }
 
+    // A collapsed group shows its channels as small tiles: the name, lit while playing.
+    // Click plays or stops; right-click opens the channel's menu.
+    void setCompact (bool shouldBeCompact)
+    {
+        if (shouldBeCompact == compact)
+            return;
+        compact = shouldBeCompact;
+        updateVisibility();
+        resized();
+        repaint();
+    }
+
     // Shows a small MIDI tag when any of this channel's controls has a MIDI assignment.
     void setMidiAssigned (bool assigned)
     {
@@ -64,8 +76,8 @@ public:
         playButton.onRightClick = [this] { if (onLearn) onLearn ("play"); };
         xfButton.onRightClick = [this] { if (onLearn) onLearn ("xf"); };
         volume.onRightClick = [this] { if (onLearn) onLearn ("vol"); };
-        xfButton.setTooltip ("Crossfade to this channel: it fades in while the others in this row fade out");
-        fxButton.setTooltip ("This channel's own effects (the row's FX still apply after them)");
+        xfButton.setTooltip ("Crossfade to this channel: it fades in while the others in this group fade out");
+        fxButton.setTooltip ("This channel's own effects (the group's FX still apply after them)");
         dubButton.setTooltip ("Overdub onto this loop: plays it if needed and records the armed inputs on top");
         dubButton.setColour (juce::TextButton::textColourOffId, Theme::text);
 
@@ -98,13 +110,7 @@ public:
         rowColour = colour;
         volume.setColour (juce::Slider::trackColourId, rowColour);
 
-        const bool hasSample = state != State::empty;
-        playButton.setVisible (hasSample);
-        xfButton.setVisible (hasSample && ! oneShot);
-        dubButton.setVisible (hasSample && ! oneShot);
-        fxButton.setVisible (hasSample);
-        volume.setVisible (hasSample);
-        meter.setVisible (hasSample);
+        updateVisibility();
 
         fxButton.setColour (juce::TextButton::buttonColourId, hasFx ? rowColour.darker (0.15f) : Theme::raised);
         fxButton.setColour (juce::TextButton::textColourOffId, hasFx ? Theme::background : Theme::textDim);
@@ -134,6 +140,27 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat().reduced (1.0f);
+
+        if (compact)
+        {
+            const bool lit = state == State::playing || state == State::fadingIn
+                          || ((state == State::cuedStart || state == State::cuedStop) && blinkOn);
+            const auto fill = state == State::empty ? Theme::panel
+                            : lit ? (state == State::fadingIn || state == State::cuedStart ? Theme::warn : rowColour)
+                                  : Theme::raised.interpolatedWith (rowColour, 0.06f);
+            Theme::drawSurface (g, r, fill, 5.0f);
+            if (state == State::empty)
+            {
+                g.setColour (Theme::panelEdge);
+                g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
+            }
+
+            g.setColour (lit ? Theme::background : state == State::empty ? Theme::textDim : Theme::text);
+            g.setFont (Theme::heading (12.0f));
+            const auto text = state == State::empty ? juce::String ("empty") : (oneShot ? "1x " : "") + label;
+            g.drawFittedText (text, getLocalBounds().reduced (7, 2), juce::Justification::centred, 1, 0.8f);
+            return;
+        }
 
         if (state == State::empty)
         {
@@ -189,6 +216,12 @@ public:
 
     void resized() override
     {
+        if (compact)
+        {
+            nameArea = getLocalBounds();
+            return;
+        }
+
         auto area = getLocalBounds().reduced (5);
         nameArea = area.removeFromTop (38);
         area.removeFromTop (2);
@@ -230,7 +263,8 @@ public:
             return;
 
         // Empty: click loads. Otherwise the name (or a right-click anywhere) opens the menu.
-        if (state == State::empty && ! e.mods.isPopupMenu())
+        // A compact tile plays or stops on a click instead.
+        if ((state == State::empty || compact) && ! e.mods.isPopupMenu())
         {
             if (onPlay) onPlay();
         }
@@ -241,8 +275,19 @@ public:
     }
 
 private:
+    void updateVisibility()
+    {
+        const bool hasSample = state != State::empty && ! compact;
+        playButton.setVisible (hasSample);
+        xfButton.setVisible (hasSample && ! oneShot);
+        dubButton.setVisible (hasSample && ! oneShot);
+        fxButton.setVisible (hasSample);
+        volume.setVisible (hasSample);
+        meter.setVisible (hasSample);
+    }
+
     juce::String label;
-    bool oneShot = false, smoothed = false, reversed = false, midiAssigned = false;
+    bool oneShot = false, smoothed = false, reversed = false, midiAssigned = false, compact = false;
     bool blinkOn = false;   // the current half of a cued channel's blink
     bool dubWaiting = false, overdubbing = false;
     State state = State::empty;
@@ -257,11 +302,13 @@ private:
 // A group of channels: its name, FX and group fader on the left, then its
 // channels in a grid. By default the grid is one line (wrapping if the window is
 // too narrow); dragging the right edge picks a number of columns instead.
-// Drag the name to move the group.
+// Drag the name to move the group. The arrow by the name collapses it to a short
+// bar: name, MUTE and FX, and a small tile per channel.
 class RowView : public juce::Component
 {
 public:
     static constexpr int headerWidth = 110, cardWidth = 112, cardHeight = 186, cardGap = 6, padding = 6;
+    static constexpr int tileHeight = 28, collapsedHeight = 66;   // a collapsed group
     static constexpr const char* dragPrefix = "group:";
 
     int index = 0;
@@ -270,7 +317,7 @@ public:
     std::function<void (int)> onPlay, onCrossfade, onMenu, onChannelFx, onDub;
     std::function<void (int, const juce::String&)> onChannelLearn;
     std::function<void (int, double)> onVolume;
-    std::function<void()> onAddChannel, onHeaderMenu, onFx, onLayoutChanged;
+    std::function<void()> onAddChannel, onHeaderMenu, onFx, onLayoutChanged, onToggleCollapsed;
     ColumnResizer resizer;   // its onColumnsChanged is set by the owner
     juce::Point<int> grabOffset;   // where in the group the mouse picked it up
 
@@ -297,16 +344,20 @@ public:
 
     // The size a group with this many channels wants, given the widest it may be.
     // columns 0 means automatic: everything on one line if it fits.
-    static juce::Point<int> preferredSize (int numChannels, int maxWidth, int wantedColumns = 0)
+    // A collapsed group keeps its width (so the layout doesn't jump) but is only as tall as its tiles.
+    static juce::Point<int> preferredSize (int numChannels, int maxWidth, int wantedColumns = 0, bool isCollapsed = false)
     {
         const int items = juce::jmax (1, numChannels);
         const int cell = cardWidth + cardGap;
         const int fitting = juce::jmax (1, (maxWidth - headerWidth - 2 * padding + cardGap) / cell);
         const int columns = juce::jlimit (1, items, juce::jmin (fitting, wantedColumns > 0 ? wantedColumns : items));
         const int lines = (items + columns - 1) / columns;
-        return { headerWidth + 2 * padding + columns * cell - cardGap,
-                 juce::jmax (cardHeight, lines * (cardHeight + cardGap) - cardGap) + 2 * padding };
+        const int height = isCollapsed ? juce::jmax (collapsedHeight - 2 * padding, lines * (tileHeight + cardGap) - cardGap)
+                                       : juce::jmax (cardHeight, lines * (cardHeight + cardGap) - cardGap);
+        return { headerWidth + 2 * padding + columns * cell - cardGap, height + 2 * padding };
     }
+
+    bool isCollapsed() const   { return collapsed; }
 
     juce::Component* getCard (int slot)   { return juce::isPositiveAndBelow (slot, cards.size()) ? cards[slot] : nullptr; }
     ChannelCard* getChannelCard (int slot) { return juce::isPositiveAndBelow (slot, cards.size()) ? cards[slot] : nullptr; }
@@ -317,6 +368,19 @@ public:
         const auto newColour = Theme::rowColour (row.colour);
         fixedColumns = row.columns > 0;
         fxButton.setColour (juce::TextButton::buttonColourId, row.fx.anyOn() ? newColour.darker (0.15f) : Theme::raised);
+
+        if (row.collapsed != collapsed)
+        {
+            collapsed = row.collapsed;
+            strip.setMuteOnly (collapsed);
+            addButton.setVisible (! collapsed);
+            for (auto* c : cards)
+                c->setCompact (collapsed);
+            if (onLayoutChanged)
+                onLayoutChanged();
+            resized();
+            repaint();
+        }
 
         if (row.name != name || newColour != colour)
         {
@@ -340,6 +404,7 @@ public:
                 c->onDub = [this, i] { if (onDub) onDub (i); };
                 c->onVolume = [this, i] (double db) { if (onVolume) onVolume (i, db); };
                 c->onLearn = [this, i] (const juce::String& control) { if (onChannelLearn) onChannelLearn (i, control); };
+                c->setCompact (collapsed);
                 addAndMakeVisible (c);
             }
 
@@ -374,7 +439,7 @@ public:
     {
         const int cell = cardWidth + cardGap;
         const int column = juce::jlimit (0, columns, (pos.x - gridArea.getX() + cell / 2) / cell);
-        const int line = juce::jmax (0, (pos.y - gridArea.getY()) / (cardHeight + cardGap));
+        const int line = juce::jmax (0, (pos.y - gridArea.getY()) / (cellHeight() + cardGap));
         return juce::jlimit (0, cards.size(), line * columns + column);
     }
 
@@ -433,30 +498,78 @@ public:
         // Coloured spine on the left identifies the group at a glance.
         Theme::drawSpine (g, bounds, colour);
 
+        // The collapse arrow: pointing down when open, right when collapsed.
+        {
+            const auto c = arrowArea.toFloat().getCentre();
+            juce::Path arrow;
+            if (collapsed) arrow.addTriangle (c.x - 3.0f, c.y - 5.0f, c.x - 3.0f, c.y + 5.0f, c.x + 4.0f, c.y);
+            else           arrow.addTriangle (c.x - 5.0f, c.y - 3.0f, c.x + 5.0f, c.y - 3.0f, c.x, c.y + 4.0f);
+            g.setColour (arrowHover ? Theme::text : colour.withAlpha (0.85f));
+            g.fillPath (arrow);
+        }
+
         g.setColour (colour);
         g.setFont (Theme::heading (14.0f, 0.1f));
-        g.drawFittedText (name.toUpperCase(), nameArea.reduced (8, 0), juce::Justification::centredLeft, 2);
+        g.drawFittedText (name.toUpperCase(), nameArea.withLeft (arrowArea.getRight()).reduced (2, 0),
+                          juce::Justification::centredLeft, collapsed ? 1 : 2);
     }
 
     void resized() override
     {
         auto area = getLocalBounds();
         auto header = area.removeFromLeft (headerWidth).withTrimmedLeft (6);
-        nameArea = header.removeFromTop (34);
-        auto buttons = header.removeFromTop (24).reduced (8, 0);
-        addButton.setBounds (buttons.removeFromRight (28));
-        buttons.removeFromRight (4);
-        fxButton.setBounds (buttons);
-        strip.setBounds (header);
+
+        if (collapsed)
+        {
+            // Name on top, then MUTE and FX side by side.
+            header.removeFromTop (padding - 2);
+            nameArea = header.removeFromTop (28);
+            auto buttons = header.removeFromTop (24).reduced (8, 0);
+            fxButton.setBounds (buttons.removeFromRight (34));
+            buttons.removeFromRight (4);
+            strip.setBounds (buttons);
+        }
+        else
+        {
+            nameArea = header.removeFromTop (34);
+            auto buttons = header.removeFromTop (24).reduced (8, 0);
+            addButton.setBounds (buttons.removeFromRight (28));
+            buttons.removeFromRight (4);
+            fxButton.setBounds (buttons);
+            strip.setBounds (header);
+        }
+        arrowArea = nameArea.withWidth (24);
 
         gridArea = area.reduced (padding);
         columns = juce::jmax (1, (gridArea.getWidth() + cardGap) / (cardWidth + cardGap));
+
+        if (collapsed)
+        {
+            // Tiles sit in the middle of the bar.
+            const int lines = (juce::jmax (1, cards.size()) + columns - 1) / columns;
+            const int used = lines * (tileHeight + cardGap) - cardGap;
+            gridArea = gridArea.withTrimmedTop (juce::jmax (0, (gridArea.getHeight() - used) / 2));
+        }
 
         for (int i = 0; i < cards.size(); ++i)
             cards[i]->setBounds (cellBounds (i));
     }
 
-    void mouseMove (const juce::MouseEvent& e) override       { resizer.mouseMove (*this, e); }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        resizer.mouseMove (*this, e);
+        const bool over = arrowArea.contains (e.getPosition());
+        if (over != arrowHover)
+        {
+            arrowHover = over;
+            repaint (arrowArea);
+        }
+    }
+
+    void mouseExit (const juce::MouseEvent&) override
+    {
+        if (arrowHover) { arrowHover = false; repaint (arrowArea); }
+    }
     void mouseDoubleClick (const juce::MouseEvent& e) override { resizer.mouseDoubleClick (*this, e); }
 
     void mouseDown (const juce::MouseEvent& e) override
@@ -486,22 +599,34 @@ public:
         if (resizer.mouseUp())
             return;
 
-        if (e.mouseWasClicked() && nameArea.contains (e.getPosition()) && onHeaderMenu)
+        if (! e.mouseWasClicked())
+            return;
+
+        if (arrowArea.contains (e.getPosition()) && ! e.mods.isPopupMenu())
+        {
+            if (onToggleCollapsed) onToggleCollapsed();
+        }
+        else if (nameArea.contains (e.getPosition()) && onHeaderMenu)
+        {
             onHeaderMenu();
+        }
     }
 
 private:
     juce::Rectangle<int> cellBounds (int i) const
     {
         return { gridArea.getX() + (i % columns) * (cardWidth + cardGap),
-                 gridArea.getY() + (i / columns) * (cardHeight + cardGap),
-                 cardWidth, cardHeight };
+                 gridArea.getY() + (i / columns) * (cellHeight() + cardGap),
+                 cardWidth, cellHeight() };
     }
+
+    int cellHeight() const   { return collapsed ? tileHeight : cardHeight; }
 
     juce::String name;
     juce::Colour colour = Theme::accent;
-    juce::Rectangle<int> nameArea, gridArea;
+    juce::Rectangle<int> nameArea, gridArea, arrowArea;
     int columns = 1, dropMarker = -1, groupDropSide = 0;
+    bool collapsed = false, arrowHover = false;
     bool fixedColumns = false;
     juce::OwnedArray<ChannelCard> cards;
     juce::TextButton addButton { "+" };

@@ -87,7 +87,7 @@ public:
             g.drawFittedText ("NEXT: " + cuedText, cuedArea, juce::Justification::centred, 1);
         }
 
-        if (hardwarePos >= 0.0f)
+        if (hardwarePos >= 0.0f && ! muteOnly)
         {
             // Small amber tick beside the fader: "move the MidiMix fader to here".
             g.setColour (Theme::warn);
@@ -117,8 +117,23 @@ public:
         resized();
     }
 
+    // Just the MUTE button (a collapsed group's header).
+    void setMuteOnly (bool shouldBeMuteOnly)
+    {
+        muteOnly = shouldBeMuteOnly;
+        fader.setVisible (! muteOnly);
+        meter.setVisible (! muteOnly);
+        resized();
+    }
+
     void resized() override
     {
+        if (muteOnly)
+        {
+            muteButton.setBounds (getLocalBounds());
+            return;
+        }
+
         auto area = getLocalBounds().reduced (8);
 
         if (horizontal)
@@ -158,5 +173,5 @@ private:
     juce::String title, cuedText;
     juce::Rectangle<int> titleArea, cuedArea;
     float hardwarePos = -1.0f;
-    bool horizontal = false;
+    bool horizontal = false, muteOnly = false;
 };
