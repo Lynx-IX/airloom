@@ -155,9 +155,6 @@ void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample,
         stereo.copyFrom (0, 0, view, 0, 0, n);
         stereo.copyFrom (1, 0, view, plugin->getTotalNumOutputChannels() > 1 ? 1 : 0, 0, n);
 
-        peakL = juce::jmax (peakL.load(), stereo.getMagnitude (0, 0, n));
-        peakR = juce::jmax (peakR.load(), stereo.getMagnitude (1, 0, n));
-
         const int recordable = juce::jmax (0, juce::jmin (n, recordBus.getNumSamples() - done));
         // Recorded at the fader level, so a new loop matches what you were hearing.
         auto addToRecording = [&]
@@ -181,6 +178,10 @@ void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample,
             for (int ch = 0; ch < 2; ++ch)
                 stereo.setSample (ch, i, stereo.getSample (ch, i) * g);
         }
+
+        // The meter shows what you hear: after the effects, fader and mute.
+        peakL = juce::jmax (peakL.load(), stereo.getMagnitude (0, 0, n));
+        peakR = juce::jmax (peakR.load(), stereo.getMagnitude (1, 0, n));
 
         // To the speakers, and (after the fader) to the shared Space reverb.
         for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)

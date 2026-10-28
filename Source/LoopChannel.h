@@ -76,6 +76,7 @@ private:
 
     std::array<FxChain, numChannelFx> channelFx;
     std::array<juce::AudioBuffer<float>, numChannelFx> channelFxBuffers;   // audio thread only
+    std::array<std::atomic<float>, numChannelFx> channelFxPeaks {};         // after each channel's own effects
 
     FxChain fx;
     PluginInsert insert;

@@ -3040,7 +3040,7 @@ void MainComponent::showInstrumentMenu (int i)
         root.addItem (100 + n, PadLayout::noteNames[n], true, inst.padRoot == n);
     for (int s = 0; s < PadLayout::numScales; ++s)
         scale.addItem (120 + s, PadLayout::scaleNames[s], true, inst.padScale == s);
-    for (int o = 1; o <= 6; ++o)
+    for (int o = minPadOctave; o <= maxPadOctave; ++o)
         octave.addItem (140 + o, "Octave " + juce::String (o) + "  (bottom-left = " + PadLayout::noteNames[inst.padRoot] + juce::String (o) + ")",
                         true, inst.padOctave == o);
     juce::PopupMenu fire;
@@ -3093,7 +3093,7 @@ void MainComponent::showInstrumentMenu (int i)
         if (r >= 11 && r < 11 + devices.size()) { in.midiSource = devices[r - 11].name; in.midiSourceId = devices[r - 11].identifier; }
         if (r >= 100 && r < 112) in.padRoot = r - 100;
         if (r >= 120 && r < 120 + PadLayout::numScales) in.padScale = r - 120;
-        if (r >= 141 && r <= 146) in.padOctave = r - 140;
+        if (r >= 140 + minPadOctave && r <= 140 + maxPadOctave) in.padOctave = r - 140;
         if (r == 30 || r == 31) in.recordWithFx = r == 30;
 
         if (r == 40)
@@ -3348,6 +3348,87 @@ void MainComponent::recPressed()
     if (! looper.startRecording (barLine < 0 ? -1 : barLine + roundTripLatency))
         errorMessage = "Still saving the last loop - press REC again";
 
+    repaint();
+}
+
+void MainComponent::nudgeFireVolume (const juce::String& fireName, int steps)
+{
+    juce::String fireId;
+    for (const auto& fire : fireOutputs)
+        if (fire.name == fireName)
+            fireId = fire.inputId;
+
+    std::vector<int> attached;
+    double loudest = -60.0;
+    for (int i = 0; i < (int) liveSet.instruments.size() && i < inputsView.instrumentStrips.size(); ++i)
+        if (InstrumentChannel::playsFrom (midiSourceFor (i), fireName, fireId))
+        {
+            attached.push_back (i);
+            loudest = juce::jmax (loudest, inputsView.instrumentStrips[i]->strip.fader.getValue());
+        }
+
+    // Every fader moves by the same dB (set by the loudest one), so the balance holds.
+    const double change = MidiMap::nudgeDb (loudest, steps) - loudest;
+
+    juce::StringArray levels;
+    for (int i : attached)
+    {
+        auto& fader = inputsView.instrumentStrips[i]->strip.fader;
+        const double db = juce::jlimit (-60.0, 6.0, fader.getValue() + change);
+        fader.setValue (db, juce::sendNotificationSync);   // as if moved on screen: sets the level and saves
+        levels.add (instrumentName (i) + " " + (db <= -60.0 ? juce::String ("off") : juce::String (db, 1) + " dB"));
+    }
+
+    infoMessage = levels.isEmpty() ? "No instrument plays from " + fireName
+                                   : "Fire volume: " + levels.joinIntoString (",  ");
+    repaint();
+}
+
+void MainComponent::shiftFireOctave (const juce::String& fireName, int direction)
+{
+    juce::String fireId;
+    for (const auto& fire : fireOutputs)
+        if (fire.name == fireName)
+            fireId = fire.inputId;
+
+    juce::StringArray moved;
+    bool atLimit = false;
+
+    for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
+    {
+        auto& inst = liveSet.instruments[(size_t) i];
+        if (! InstrumentChannel::playsFrom (midiSourceFor (i), fireName, fireId))
+            continue;
+
+        const int octave = juce::jlimit (minPadOctave, maxPadOctave, inst.padOctave + direction);
+        if (octave == inst.padOctave)
+        {
+            atLimit = true;
+            continue;
+        }
+
+        inst.padOctave = octave;
+        applyInstrument (i);
+
+        PadLayout keys;
+        keys.root = inst.padRoot;
+        keys.octave = inst.padOctave;
+        moved.add (instrumentName (i) + ": bottom-left pad is " + PadLayout::noteNames[keys.root] + juce::String (keys.octave));
+    }
+
+    if (! moved.isEmpty())
+    {
+        infoMessage = juce::String (direction > 0 ? "Octave up" : "Octave down") + " - " + moved.joinIntoString (",  ")
+                    + "   (GRID < > on the Fire)";
+        saveSession();
+    }
+    else
+    {
+        infoMessage = atLimit ? juce::String (direction > 0 ? "Already at the highest octave" : "Already at the lowest octave")
+                              : "No instrument plays from " + fireName;
+    }
+
+    updateFireLights();
     repaint();
 }
 
@@ -4963,6 +5044,25 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
             updateMidiLeds();
             repaint();
         }
+        return;
+    }
+
+    // On a Fire, GRID left/right move its instruments down or up an octave (unless
+    // those buttons have been given another job with MIDI learn).
+    if (device.containsIgnoreCase (MidiMap::fireName) && m.isNoteOn() && pressed
+        && (m.getNoteNumber() == MidiMap::fireGridLeftNote || m.getNoteNumber() == MidiMap::fireGridRightNote)
+        && midiMap.findTargets (device, m).isEmpty())
+    {
+        shiftFireOctave (device, m.getNoteNumber() == MidiMap::fireGridRightNote ? 1 : -1);
+        return;
+    }
+
+    // The Fire's VOLUME knob turns its instruments' faders up or down together, keeping the
+    // balance set between them on screen.
+    if (device.containsIgnoreCase (MidiMap::fireName) && m.isController() && m.getControllerNumber() == MidiMap::fireVolumeKnobCC
+        && midiMap.findTargets (device, m).isEmpty())
+    {
+        nudgeFireVolume (device, MidiMap::relativeSteps (m.getControllerValue()));
         return;
     }
 

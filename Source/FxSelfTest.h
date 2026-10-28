@@ -892,6 +892,55 @@ namespace FxSelfTest
             input.process (in, 2, out, 0, 512, recordBus);
             check (std::abs (recordBus.getSample (0, 10) - 0.5f) < 0.001f,
                    "Recording follows the input fader (a 1.0 sample at -6 dB records as " + juce::String (recordBus.getSample (0, 10), 3) + ")");
+
+            // The meter shows what's heard: after the effects and the fader. A 0.5 signal through
+            // -12 dB of effect gain and a -6 dB fader shows about 0.063; muted it shows nothing;
+            // with MONITOR off it shows the input itself (0.5).
+            InputChannel metered;
+            metered.prepare (48000.0, 512);
+            metered.setMonitor (true);
+            metered.setGain (0.5f);
+            FxSettings quieter;
+            quieter.gainDb = -12.0;
+            metered.getFx().setSettings (quieter);
+            juce::AudioBuffer<float> tone (2, 512);
+            auto meterReads = [&]
+            {
+                float shown = 0.0f;
+                for (int b = 0; b < 40; ++b)
+                {
+                    for (int i = 0; i < 512; ++i)
+                        tone.setSample (0, i, 0.5f * std::sin ((float) (b * 512 + i) * 0.0575f));
+                    tone.copyFrom (1, 0, tone, 0, 0, 512);
+                    out.clear();
+                    recordBus.clear();
+                    metered.process (tone, 2, out, 0, 512, recordBus);
+                    shown = metered.takePeaks().first;
+                }
+                return shown;
+            };
+            const float heard = meterReads();
+            metered.setMuted (true);
+            const float muted = meterReads();
+            metered.setMuted (false);
+            metered.setMonitor (false);
+            const float unmonitored = meterReads();
+            check (std::abs (heard - 0.25f * juce::Decibels::decibelsToGain (-12.0f)) < 0.01f && muted < 0.001f
+                   && std::abs (unmonitored - 0.5f) < 0.01f,
+                   "Input meters show what's heard: after effects and fader (" + juce::String (heard, 3) + "), nothing muted ("
+                   + juce::String (muted, 3) + "), the input itself with MONITOR off (" + juce::String (unmonitored, 3) + ")");
+        }
+
+        // ---- The Fire's VOLUME knob: relative steps, moving every fader by the same dB ----
+        {
+            const bool steps = MidiMap::relativeSteps (1) == 1 && MidiMap::relativeSteps (3) == 3
+                            && MidiMap::relativeSteps (127) == -1 && MidiMap::relativeSteps (125) == -3;
+            const double a = MidiMap::nudgeDb (-6.0, 4), b = MidiMap::nudgeDb (-12.0, 4);
+            const bool balanced = std::abs ((a - b) - 6.0) < 1.0e-9 && std::abs (a - -4.0) < 1.0e-9;
+            const bool limits = MidiMap::nudgeDb (5.5, 10) == 6.0 && MidiMap::nudgeDb (-59.0, -3) == -60.0
+                             && MidiMap::nudgeDb (-60.0, 5) == -50.0;
+            check (steps && balanced && limits,
+                   "Fire VOLUME knob: reads its turn direction, moves faders together keeping their balance, stops at +6 and off");
         }
 
         // ---- Freeze ----

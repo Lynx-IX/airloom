@@ -30,10 +30,15 @@ void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
             scratch.clear (ch, 0, numSamples);
     }
 
-    peakL = juce::jmax (peakL.load(), scratch.getMagnitude (0, 0, numSamples));
-    peakR = juce::jmax (peakR.load(), scratch.getMagnitude (1, 0, numSamples));
-
     gain.setTargetValue (muted ? 0.0f : targetGain.load());
+
+    // The meter shows what you hear: after the effects, fader and mute. With MONITOR off
+    // nothing is heard, so it shows the input itself instead (for setting the interface gain).
+    if (! monitor)
+    {
+        peakL = juce::jmax (peakL.load(), scratch.getMagnitude (0, 0, numSamples));
+        peakR = juce::jmax (peakR.load(), scratch.getMagnitude (1, 0, numSamples));
+    }
 
     const bool hear = monitor, record = armed, wet = recordWithFx;
     const int recordSamples = juce::jmin (numSamples, recordBus.getNumSamples());
@@ -75,6 +80,9 @@ void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
         for (int ch = 0; ch < 2; ++ch)
             scratch.setSample (ch, i, scratch.getSample (ch, i) * g);
     }
+
+    peakL = juce::jmax (peakL.load(), scratch.getMagnitude (0, 0, numSamples));
+    peakR = juce::jmax (peakR.load(), scratch.getMagnitude (1, 0, numSamples));
 
     // To the speakers, and (after the fader) to the shared Space reverb.
     for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)

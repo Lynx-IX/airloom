@@ -67,6 +67,20 @@ public:
                          firePatternUpNote = 31, firePatternDownNote = 32,
                          fireBrowserNote = 33;   // SHIFT + BROWSER: where this Fire sits beside the other (joined light show)
 
+    // The Fire's top-left knob (VOLUME). Its knobs turn endlessly and send steps, not positions:
+    // 1..63 clockwise, 127..65 anticlockwise (bigger numbers for a faster turn).
+    static constexpr int fireVolumeKnobCC = 16;
+    static int relativeSteps (int ccValue)   { return ccValue < 64 ? ccValue : ccValue - 128; }
+
+    // A fader moved by knob steps: half a dB a step, bigger steps down where the fader is quiet
+    // (so it doesn't take forever to come up from silence). -60 is off.
+    static double nudgeDb (double db, int steps)
+    {
+        for (int i = 0; i < std::abs (steps); ++i)
+            db += (steps > 0 ? 1.0 : -1.0) * (db < -30.0 ? 2.0 : 0.5);
+        return juce::jlimit (-60.0, 6.0, db);
+    }
+
 private:
     std::map<juce::String, MidiBinding> bindings;
 };

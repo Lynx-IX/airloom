@@ -76,6 +76,8 @@ void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int n
                 continue;
 
             channelFx[k].process (channelFxBuffers[k], 0, num);
+            const float fxPeak = juce::jmax (channelFxBuffers[k].getMagnitude (0, 0, num), channelFxBuffers[k].getMagnitude (1, 0, num));
+            channelFxPeaks[k] = juce::jmax (channelFxPeaks[k].load(), fxPeak);
             for (int ch = 0; ch < 2; ++ch)
             {
                 scratch.addFrom (ch, 0, channelFxBuffers[k], ch, 0, num);
@@ -247,15 +249,23 @@ bool LoopChannel::setOwnerFx (int owner, const FxSettings& settings)
 
 float LoopChannel::takeOwnerPeak (int owner)
 {
-    float p = 0.0f;
+    // A channel with its own effects is metered after them (tails included).
+    const int k = fxSlotFor (owner);
+    float p = k >= 0 ? channelFxPeaks[(size_t) k].exchange (0.0f) : 0.0f;
 
     for (size_t i = 0; i < loops.size(); ++i)
         if (loopOwners[i] == owner)
-            p = juce::jmax (p, loops[i].takePeak());
+        {
+            const float played = loops[i].takePeak();
+            if (k < 0) p = juce::jmax (p, played);
+        }
 
     for (size_t i = 0; i < shots.size(); ++i)
         if (shotOwners[i] == owner)
-            p = juce::jmax (p, shots[i].takePeak());
+        {
+            const float played = shots[i].takePeak();
+            if (k < 0) p = juce::jmax (p, played);
+        }
 
     return p;
 }

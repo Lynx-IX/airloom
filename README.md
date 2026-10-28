@@ -76,7 +76,8 @@ it's installed; writes a pass/fail report; can run while the app is open):
 - **PLAY / STOP** fades a loop in or out over the **Fade time**. Loops in the same group play together.
 - **XF** (auto crossfade) fades that channel in while every other loop in the group fades out over the fade time.
 - For a **manual crossfade**, move the channel faders yourself. Each channel is a mixer strip with its own vertical
-  fader and level meter; the group's fader and meter sit at the left of the group.
+  fader and level meter; the group's fader and meter sit at the left of the group. A channel with its own **FX**
+  is metered after them (so a reverb tail shows); the group meter shows the group after its FX and fader.
 - **One-shots** (marked `1x`) play once on top of everything; each has its own volume, plus the group's fader.
 - **Channel FX:** every channel (loops, live loops, one-shots) has its own **FX** button with the full effects chain,
   applied before the group's FX. Up to 6 channels per group can have their own effects at once; tails ring out after a
@@ -99,9 +100,10 @@ it's installed; writes a pass/fail report; can run while the app is open):
 ## Live inputs and effects
 
 - The **INPUTS** section at the top has two input channels, **Mic** (interface input 1) and **Instrument** (input 2).
-  Each has its own fader, a meter showing the incoming level, mute, **MONITOR** and **FX**.
-- **MONITOR** is off by default so a mic can't feed back when the app opens. The meter still shows the input level
-  with monitoring off, so you can set your interface gain first, then switch MONITOR on.
+  Each has its own fader, a meter, mute, **MONITOR** and **FX**. Input and instrument meters show **what you hear**:
+  after the effects, the fader and mute.
+- **MONITOR** is off by default so a mic can't feed back when the app opens. With monitoring off the meter shows the
+  input itself instead, so you can set your interface gain first, then switch MONITOR on.
 - Click an input's name to rename it or choose its source: input 1, input 2, or inputs 1 + 2 as one stereo channel.
 - **FX** opens the effects chain, in signal order:
   - **Channel** - gain (-24 to +24 dB) and pan
@@ -151,7 +153,11 @@ Hosted instruments sit in the INPUTS section next to Mic and Instrument (up to 4
   the active one lights up (to change the three, edit `fluteKeys` in `MainComponent.cpp`). Or set any **key**, **scale**
   (minor pentatonic - the default, suits Native American flute keys - major pentatonic, natural minor, major,
   Dorian, Hijaz, chromatic) and **octave** from the instrument's menu > *Fire pads*. The pads light up: root notes
-  in teal, the other scale notes dim. The Fire's buttons stay free for MIDI-learn (e.g. REC). The MidiMix never
+  in teal, the other scale notes dim. **GRID <** / **GRID >** on the Fire move the instruments it plays down / up an
+  octave (octaves 1-6; with SHIFT held they pick the light-show pattern instead). The Fire's **VOLUME knob** (top left) turns
+  the faders of the instruments it plays up or down together, all by the same dB, so the balance you set between
+  them on screen stays the same (half a dB a click, faster below -30 dB). The Fire's other buttons stay free
+  for MIDI-learn (e.g. REC), and a GRID button given a MIDI-learn job does that job instead. The MidiMix never
   plays notes.
 - **Preset names:** an instrument's strip is titled with the **preset loaded in it** (e.g. "Flume Pad"), with the
   plug-in's name moving to the line under it. Airloom reads it from the settings the plug-in saves - it works for

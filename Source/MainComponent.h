@@ -144,6 +144,9 @@ private:
     void addRow (std::function<void (int)> then = {});
     void showRowMenu (int row);
     void setTheme (int index);
+    void shiftFireOctave (const juce::String& fireName, int direction);
+    void nudgeFireVolume (const juce::String& fireName, int steps);
+    static constexpr int minPadOctave = 1, maxPadOctave = 6;   // the bottom-left pad's octave
     void toggleCollapsed (int row);
     void setAllCollapsed (bool collapse);
     void removeRow (int row);
@@ -332,6 +335,7 @@ private:
 
     // Light show: a Fire's pads as a visualizer of the output. On the Fire, with SHIFT held:
     // ALT turns it on and off, GRID left/right picks the pattern, PATTERN up/down the palette.
+    // (Without SHIFT, GRID left/right move the Fire's instruments down/up an octave.)
     // Kept per Fire, by its USB path.
     // 'position' joins two Fires into one display: where this one sits beside the other.
     enum FirePosition { separate, left, right, top, bottom, numFirePositions };
