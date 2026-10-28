@@ -13,6 +13,7 @@
 #include "StageView.h"
 #include "PresetName.h"
 #include "FireVisualizer.h"
+#include "RowView.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
@@ -1359,6 +1360,52 @@ namespace FxSelfTest
             juce::FileOutputStream out (file);
             juce::PNGImageFormat png;
             check (out.openedOk() && png.writeImageToStream (image, out), "Stage view drawn to " + file.getFullPathName());
+        }
+
+        // ---- Channel cards: loops get their own DUB, one-shots don't ----
+        {
+            using St = ChannelCard::State;
+            const auto colour = Theme::rowColour (1);
+            ChannelCard idle, dubbing, waiting, oneShot;
+            idle.setContent ("Birds", false, false, false, false, St::idle, 0.0, colour);
+            dubbing.setContent ("Water lapping", false, true, false, false, St::playing, -3.0, colour);
+            dubbing.setDubState (true, true);
+            waiting.setContent ("Rain", false, false, false, true, St::cuedStart, -6.0, colour);
+            waiting.setDubState (true, false);
+            oneShot.setContent ("Thunder", true, false, false, false, St::idle, 0.0, colour);
+
+            auto dubOf = [] (ChannelCard& card) -> juce::Component*
+            {
+                for (auto* c : card.getChildren())
+                    if (auto* b = dynamic_cast<juce::TextButton*> (c); b != nullptr && b->getButtonText() == "DUB")
+                        return b;
+                return nullptr;
+            };
+
+            juce::Image strip (juce::Image::ARGB, 4 * (RowView::cardWidth + RowView::cardGap), RowView::cardHeight, true);
+            int x = 0;
+            bool laidOut = true;
+            for (auto* card : { &idle, &dubbing, &waiting, &oneShot })
+            {
+                card->setBounds (0, 0, RowView::cardWidth, RowView::cardHeight);
+                if (auto* d = dubOf (*card); d != nullptr && d->isVisible())
+                    laidOut = laidOut && d->getBottom() < card->getVolumeSlider().getY() && d->getWidth() >= 40;
+                const auto snap = card->createComponentSnapshot (card->getLocalBounds());
+                {
+                    juce::Graphics g (strip);
+                    g.drawImageAt (snap, x, 0);
+                }
+                x += RowView::cardWidth + RowView::cardGap;
+            }
+
+            check (dubOf (idle) != nullptr && dubOf (idle)->isVisible() && ! dubOf (oneShot)->isVisible(),
+                   "Loop channels show their own DUB button, one-shots don't");
+            check (laidOut, "Channel DUB sits between PLAY and the fader");
+
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-cards.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (strip, out), "Channel cards drawn to " + file.getFullPathName());
         }
 
         report.add ({});

@@ -231,6 +231,8 @@ private:
     // Loop recording
     void recPressed();
     void dubPressed();
+    void channelDubPressed (int row, int slot);
+    void startPendingDub();
     void undoPressed();
     void stopOverdubbing();
     void setArmed (int input, bool armed);
@@ -347,6 +349,10 @@ private:
     Looper looper;
     int dubTargetId = -1;                    // the loop DUB records onto
     int overdubSlotId = -1;                  // the loop being overdubbed right now
+    int pendingDubId = -1;                   // a channel DUB waiting for its loop to come in
+    juce::uint32 pendingDubSince = 0;
+    int pendingDubOldTarget = -1;            // where the main DUB pointed before, for a cancel
+    void cancelPendingDub();
     juce::int64 firstLoopLength = 0;         // for "Match first loop"
     bool restoring = false;              // suppresses autosave while a set is being loaded
 

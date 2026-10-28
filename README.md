@@ -174,6 +174,10 @@ The looper controls (REC, DUB, UNDO, loop length and status) sit in the middle o
    major is **Loop Bb major 1** in a **Loops Bb major** group (created automatically, at the bottom); with no
    instrument key they go into **Live Loops**. If all 8 groups are taken, new keys share an existing loops group.
 4. **DUB** records on top of the latest loop (or any loop: its menu > *Overdub on this loop*); press again to stop.
+   Every loop channel also has its own small **DUB** under PLAY: it overdubs onto that loop (starting it first, and
+   waiting for it to come in, if it's stopped) and lights amber while overdubbing. A second press always undoes the
+   first: it stops the overdub (UNDO removes what was added), or cancels the wait and stops the loop it started. The
+   main DUB button only moves to that loop once an overdub actually starts. Right-click it to map it to a MIDI button.
    The new layer lines up with what you heard - the interface's latency is compensated. **UNDO** removes the last
    overdub.
 

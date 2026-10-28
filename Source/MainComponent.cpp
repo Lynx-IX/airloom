@@ -1791,6 +1791,7 @@ void MainComponent::rebuildRows()
 
         view->onPlay = [this, i] (int s) { playPressed (i, s); };
         view->onCrossfade = [this, i] (int s) { crossfadePressed (i, s); };
+        view->onDub = [this, i] (int s) { channelDubPressed (i, s); };
         view->onMenu = [this, i] (int s) { showChannelMenu (i, s); };
         view->onHeaderMenu = [this, i] { showRowMenu (i); };
         view->onAddChannel = [this, i] { addChannel (i); };
@@ -1809,7 +1810,8 @@ void MainComponent::rebuildRows()
         {
             const auto& slot = liveSet.rows[(size_t) i].slots[(size_t) s];
             const auto name = slot.label.isNotEmpty() ? slot.label : slot.file.getFileNameWithoutExtension();
-            const auto what = control == "play" ? (slot.oneShot ? "play" : "play / stop") : control == "xf" ? "crossfade" : "volume";
+            const auto what = control == "play" ? (slot.oneShot ? "play" : "play / stop") : control == "xf" ? "crossfade"
+                            : control == "dub" ? "overdub" : "volume";
             showLearnMenu ("ch." + slot.uid + "." + control, name + " " + what);
         };
 
@@ -1980,7 +1982,7 @@ void MainComponent::updateRowViews()
             {
                 const auto prefix = "ch." + r.slots[(size_t) s].uid + ".";
                 card->setMidiAssigned (midiMap.get (prefix + "play").isValid() || midiMap.get (prefix + "xf").isValid()
-                                       || midiMap.get (prefix + "vol").isValid());
+                                       || midiMap.get (prefix + "dub").isValid() || midiMap.get (prefix + "vol").isValid());
             }
     }
 }
@@ -3552,6 +3554,122 @@ void MainComponent::dubPressed()
     overdubSlotId = slot->id;
 }
 
+// A channel's own DUB: overdub onto that loop (starting it first if it's stopped),
+// or stop if it's the one overdubbing. Any other overdub stops first. A second press
+// always undoes the first: it stops the overdub, or cancels a wait (and the loop it started).
+// The main DUB only moves to this loop once an overdub actually begins.
+void MainComponent::channelDubPressed (int row, int slot)
+{
+    if (! juce::isPositiveAndBelow (row, (int) liveSet.rows.size()) || ! juce::isPositiveAndBelow (slot, (int) liveSet.rows[(size_t) row].slots.size()))
+        return;
+
+    auto& sl = liveSet.rows[(size_t) row].slots[(size_t) slot];
+    const bool overdubbing = looper.getState() == Looper::State::overdubbing;
+
+    if (overdubbing && overdubSlotId == sl.id)
+    {
+        stopOverdubbing();
+        return;
+    }
+
+    if (overdubbing)
+        stopOverdubbing();
+
+    // Pressed again while waiting: cancel.
+    if (pendingDubId == sl.id)
+    {
+        cancelPendingDub();
+        return;
+    }
+
+    if (pendingDubId >= 0)
+        cancelPendingDub();
+
+    const int oldTarget = dubTargetId;
+
+    // A stopped loop starts first; the overdub begins once it's actually playing
+    // (it may be loading or waiting for the beat).
+    if (! sl.playing && sl.file != juce::File() && ! sl.oneShot)
+    {
+        if (! anyArmed())
+        {
+            errorMessage = "Arm an input first: press ARM on Mic or Instrument";
+            return;
+        }
+
+        playPressed (row, slot);
+        pendingDubId = sl.id;
+        pendingDubOldTarget = oldTarget;
+        pendingDubSince = juce::Time::getMillisecondCounter();
+        startPendingDub();
+        return;
+    }
+
+    dubTargetId = sl.id;
+    dubPressed();
+    if (looper.getState() != Looper::State::overdubbing)
+        dubTargetId = oldTarget;
+    repaint();
+}
+
+// Calls off a channel DUB that's waiting, and stops the loop it started.
+void MainComponent::cancelPendingDub()
+{
+    const int id = std::exchange (pendingDubId, -1);
+    int r = -1, s = -1;
+    for (int i = 0; i < (int) liveSet.rows.size() && r < 0; ++i)
+        for (int j = 0; j < (int) liveSet.rows[(size_t) i].slots.size(); ++j)
+            if (liveSet.rows[(size_t) i].slots[(size_t) j].id == id) { r = i; s = j; break; }
+
+    if (r >= 0)
+    {
+        auto& row = liveSet.rows[(size_t) r];
+        auto& sl = row.slots[(size_t) s];
+        if (sl.playing || engineFor (row).cueFor (sl.id) != LoopChannel::Cue::none)
+            playPressed (r, s);   // stops it, or cancels its cue
+    }
+
+    dubTargetId = pendingDubOldTarget;
+    infoMessage = "Overdub cancelled";
+    repaint();
+}
+
+// Starts a channel DUB that was waiting for its loop, once the loop is playing.
+void MainComponent::startPendingDub()
+{
+    if (pendingDubId < 0)
+        return;
+
+    auto [row, slot] = liveSet.findSlot (pendingDubId);
+    if (slot == nullptr || juce::Time::getMillisecondCounter() - pendingDubSince > 20000)
+    {
+        pendingDubId = -1;
+        dubTargetId = pendingDubOldTarget;
+        return;
+    }
+
+    const bool cued = engineFor (*row).cueFor (slot->id) != LoopChannel::Cue::none;
+    if (! slot->playing || slot->loading || cued)
+    {
+        // Stopped again before it came in: forget it.
+        if (! slot->playing && ! slot->loading && ! cued && juce::Time::getMillisecondCounter() - pendingDubSince > 1500)
+        {
+            pendingDubId = -1;
+            dubTargetId = pendingDubOldTarget;
+        }
+        return;
+    }
+
+    pendingDubId = -1;
+    if (looper.getState() == Looper::State::idle)
+    {
+        dubTargetId = slot->id;
+        dubPressed();
+    }
+    if (looper.getState() != Looper::State::overdubbing)
+        dubTargetId = pendingDubOldTarget;
+}
+
 void MainComponent::stopOverdubbing()
 {
     looper.stopOverdub();
@@ -3587,7 +3705,17 @@ void MainComponent::undoPressed()
 
 void MainComponent::updateLooperStatus()
 {
+    startPendingDub();
     const auto state = looper.getState();
+
+    // Each loop's own DUB button.
+    for (int i = 0; i < rowViews.size() && i < (int) liveSet.rows.size(); ++i)
+        for (int s = 0; s < (int) liveSet.rows[(size_t) i].slots.size(); ++s)
+            if (auto* card = rowViews[i]->getChannelCard (s))
+            {
+                const int id = liveSet.rows[(size_t) i].slots[(size_t) s].id;
+                card->setDubState (id == pendingDubId, state == Looper::State::overdubbing && id == overdubSlotId);
+            }
     juce::String status;
 
     juce::StringArray armed;
@@ -4813,7 +4941,7 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
             continue;
         }
 
-        // A channel: "ch.<uid>.play", ".xf" or ".vol".
+        // A channel: "ch.<uid>.play", ".xf", ".dub" or ".vol".
         if (target.startsWith ("ch."))
         {
             const auto uid = target.fromFirstOccurrenceOf ("ch.", false, false).upToLastOccurrenceOf (".", false, false);
@@ -4830,6 +4958,7 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
             }
             else if (pressed && control == "play") playPressed (r, s);
             else if (pressed && control == "xf")   crossfadePressed (r, s);
+            else if (pressed && control == "dub")  channelDubPressed (r, s);
             continue;
         }
 

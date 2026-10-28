@@ -18,9 +18,9 @@ public:
 
     int index = 0;
     int slotId = 0;
-    std::function<void()> onPlay, onCrossfade, onMenu, onFx;
+    std::function<void()> onPlay, onCrossfade, onMenu, onFx, onDub;
     std::function<void (double db)> onVolume;
-    std::function<void (const juce::String& control)> onLearn;   // right-click: "play", "xf" or "vol"
+    std::function<void (const juce::String& control)> onLearn;   // right-click: "play", "xf", "dub" or "vol"
     LevelMeter meter;
 
     juce::Slider& getVolumeSlider()   { return volume; }
@@ -31,22 +31,43 @@ public:
         if (assigned != midiAssigned) { midiAssigned = assigned; repaint(); }
     }
 
+    // DUB: amber text while waiting for its loop to come in, lit amber while overdubbing.
+    // Either way, pressing it again calls it off.
+    void setDubState (bool isWaiting, bool isOverdubbing)
+    {
+        if (isWaiting == dubWaiting && isOverdubbing == overdubbing)
+            return;
+
+        dubWaiting = isWaiting;
+        overdubbing = isOverdubbing;
+        dubButton.setColour (juce::TextButton::buttonColourId, overdubbing ? Theme::warn : Theme::raised);
+        dubButton.setColour (juce::TextButton::textColourOffId, overdubbing ? Theme::background : dubWaiting ? Theme::warn : Theme::text);
+        dubButton.setTooltip (overdubbing ? "Overdubbing onto this loop - press to stop (UNDO removes it)"
+                            : dubWaiting  ? "Waiting for the loop to come in - press to cancel"
+                                          : "Overdub onto this loop: plays it if needed and records the armed inputs on top");
+    }
+
     ChannelCard()
     {
         addAndMakeVisible (playButton);
         addAndMakeVisible (xfButton);
         addAndMakeVisible (fxButton);
+        addAndMakeVisible (dubButton);
         addAndMakeVisible (volume);
         addAndMakeVisible (meter);
 
         playButton.onClick = [this] { if (onPlay) onPlay(); };
         xfButton.onClick = [this] { if (onCrossfade) onCrossfade(); };
         fxButton.onClick = [this] { if (onFx) onFx(); };
+        dubButton.onClick = [this] { if (onDub) onDub(); };
+        dubButton.onRightClick = [this] { if (onLearn) onLearn ("dub"); };
         playButton.onRightClick = [this] { if (onLearn) onLearn ("play"); };
         xfButton.onRightClick = [this] { if (onLearn) onLearn ("xf"); };
         volume.onRightClick = [this] { if (onLearn) onLearn ("vol"); };
         xfButton.setTooltip ("Crossfade to this channel: it fades in while the others in this row fade out");
         fxButton.setTooltip ("This channel's own effects (the row's FX still apply after them)");
+        dubButton.setTooltip ("Overdub onto this loop: plays it if needed and records the armed inputs on top");
+        dubButton.setColour (juce::TextButton::textColourOffId, Theme::text);
 
         volume.setSliderStyle (juce::Slider::LinearVertical);
         volume.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 18);
@@ -80,6 +101,7 @@ public:
         const bool hasSample = state != State::empty;
         playButton.setVisible (hasSample);
         xfButton.setVisible (hasSample && ! oneShot);
+        dubButton.setVisible (hasSample && ! oneShot);
         fxButton.setVisible (hasSample);
         volume.setVisible (hasSample);
         meter.setVisible (hasSample);
@@ -171,15 +193,20 @@ public:
         nameArea = area.removeFromTop (38);
         area.removeFromTop (2);
 
+        // PLAY and FX, then (loops only) a smaller DUB and XF underneath.
         auto buttons = area.removeFromTop (26);
         fxButton.setBounds (buttons.removeFromRight (28));
         buttons.removeFromRight (2);
-        if (xfButton.isVisible())
-        {
-            xfButton.setBounds (buttons.removeFromRight (28));
-            buttons.removeFromRight (2);
-        }
         playButton.setBounds (buttons);
+
+        if (dubButton.isVisible())
+        {
+            area.removeFromTop (2);
+            auto second = area.removeFromTop (20);
+            xfButton.setBounds (second.removeFromRight (28));
+            second.removeFromRight (2);
+            dubButton.setBounds (second);
+        }
         area.removeFromTop (4);
 
         meter.setBounds (area.removeFromRight (16).withTrimmedBottom (22).reduced (0, 4));
@@ -217,11 +244,12 @@ private:
     juce::String label;
     bool oneShot = false, smoothed = false, reversed = false, midiAssigned = false;
     bool blinkOn = false;   // the current half of a cued channel's blink
+    bool dubWaiting = false, overdubbing = false;
     State state = State::empty;
     juce::Colour rowColour = Theme::accent;
     juce::Rectangle<int> nameArea;
 
-    RightClickable<juce::TextButton> playButton { "PLAY" }, xfButton { "XF" };
+    RightClickable<juce::TextButton> playButton { "PLAY" }, xfButton { "XF" }, dubButton { "DUB" };
     juce::TextButton fxButton { "FX" };
     RightClickable<juce::Slider> volume;
 };
@@ -233,13 +261,13 @@ private:
 class RowView : public juce::Component
 {
 public:
-    static constexpr int headerWidth = 110, cardWidth = 112, cardHeight = 170, cardGap = 6, padding = 6;
+    static constexpr int headerWidth = 110, cardWidth = 112, cardHeight = 186, cardGap = 6, padding = 6;
     static constexpr const char* dragPrefix = "group:";
 
     int index = 0;
     ChannelStrip strip { {}, false };
 
-    std::function<void (int)> onPlay, onCrossfade, onMenu, onChannelFx;
+    std::function<void (int)> onPlay, onCrossfade, onMenu, onChannelFx, onDub;
     std::function<void (int, const juce::String&)> onChannelLearn;
     std::function<void (int, double)> onVolume;
     std::function<void()> onAddChannel, onHeaderMenu, onFx, onLayoutChanged;
@@ -309,6 +337,7 @@ public:
                 c->onCrossfade = [this, i] { if (onCrossfade) onCrossfade (i); };
                 c->onMenu = [this, i] { if (onMenu) onMenu (i); };
                 c->onFx = [this, i] { if (onChannelFx) onChannelFx (i); };
+                c->onDub = [this, i] { if (onDub) onDub (i); };
                 c->onVolume = [this, i] (double db) { if (onVolume) onVolume (i, db); };
                 c->onLearn = [this, i] (const juce::String& control) { if (onChannelLearn) onChannelLearn (i, control); };
                 addAndMakeVisible (c);
