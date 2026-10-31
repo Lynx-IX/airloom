@@ -245,6 +245,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     xml->setAttribute ("beatsPerBar", beatsPerBar);
     xml->setAttribute ("beatUnit", beatUnit);
     xml->setAttribute ("loopLength", (int) loopLength);
+    xml->setAttribute ("layoutWidth", layoutWidth);
     space.addToXml (*xml->createNewChildElement ("Space"));
 
     auto* scenesXml = xml->createNewChildElement ("Scenes");
@@ -435,6 +436,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     beatsPerBar = juce::jlimit (1, 16, xml.getIntAttribute ("beatsPerBar", 4));
     beatUnit = xml.getIntAttribute ("beatUnit", 4) == 8 ? 8 : 4;
     loopLength = (LoopLength) juce::jlimit (0, 2, xml.getIntAttribute ("loopLength", 0));
+    layoutWidth = juce::jmax (0, xml.getIntAttribute ("layoutWidth", 0));
     midi.reset();
     if (auto* m = xml.getChildByName ("MidiMap"))
         midi = std::make_shared<juce::XmlElement> (*m);

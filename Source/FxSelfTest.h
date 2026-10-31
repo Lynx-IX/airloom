@@ -2170,6 +2170,18 @@ namespace FxSelfTest
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (image, out), "Samples panel drawn to " + file.getFullPathName());
         }
 
+        // ---- A fixed layout width is kept with the set ----
+        {
+            LiveSet fixedLayout;
+            fixedLayout.layoutWidth = 1840;
+            LiveSet back;
+            back.loadFromXml (*fixedLayout.toXml ({}), {});
+            LiveSet fitted;
+            fitted.loadFromXml (*LiveSet::makeDefault().toXml ({}), {});
+            check (back.layoutWidth == 1840 && fitted.layoutWidth == 0,
+                   "A set can keep its layout at a fixed width (new sets rearrange to fit the window)");
+        }
+
         // ---- Undo: only edits make steps, not playing ----
         {
             LiveSet base = LiveSet::makeDefault();

@@ -59,7 +59,9 @@ it's installed; writes a pass/fail report; can run while the app is open):
 - **Groups** (loop, input and instrument groups) can go anywhere: **drag a group by its name** and drop it - an
   outline shows where it lands, and it stays exactly there. Near another group's edge it snaps to it: beside it or
   below it, tops or sides lined up. Groups never overlap: one dropped onto another (or that grows into the next)
-  pushes just the group in the way down. Collapsing a group pulls the groups under it up to close the space;
+  pushes just the group in the way down. **Set > Rearrange groups to fit the window** (on by default) slides groups
+  in and wraps channels when the window gets narrower; turn it off to keep the layout exactly as it is at the
+  current size - a smaller window then scrolls sideways instead of moving anything (saved with the set). Collapsing a group pulls the groups under it up to close the space;
   expanding it pushes them back where they were. Drag
   a group's **right edge** to set how many columns its grid has (6 channels as 6x1, 3x2, 2x3...); double-click the
   edge to go back to automatic. The **<** button folds the

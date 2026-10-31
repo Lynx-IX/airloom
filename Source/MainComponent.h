@@ -235,6 +235,9 @@ private:
     RowView* rowViewAt (juce::Point<int> pos);
     juce::Component* groupViewAt (juce::Point<int> pos);
     static constexpr int noGroup = std::numeric_limits<int>::min();   // not a row (>= 0) or live group (< 0)
+    // The width the groups are laid out in: the window's, or the set's fixed one (then the page scrolls sideways).
+    int groupPageWidth() const;
+    void setRearrangeToFit (bool rearrange);
     std::map<int, juce::Rectangle<int>> arrangeGroups (int moving = noGroup, juce::Point<int> movingTo = {},
                                                        std::map<int, juce::Point<int>>* wants = nullptr) const;
     juce::Point<int> droppedGroupPosition (const SourceDetails& details, int& item) const;

@@ -698,6 +698,22 @@ juce::PropertiesFile::Options MainComponent::settingsOptions()
     return options;
 }
 
+int MainComponent::groupPageWidth() const
+{
+    return liveSet.layoutWidth > 0 ? liveSet.layoutWidth : rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2;
+}
+
+void MainComponent::setRearrangeToFit (bool rearrange)
+{
+    // Fixing the layout keeps it exactly as it is at this window size.
+    liveSet.layoutWidth = rearrange ? 0 : rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2;
+    layoutRows();
+    saveSession();
+    infoMessage = rearrange ? juce::String ("Groups rearrange to fit the window")
+                            : "Layout kept as it is - a smaller window scrolls sideways instead of moving groups";
+    repaint();
+}
+
 void MainComponent::setTheme (int index)
 {
     Theme::switchTo (index);
@@ -739,6 +755,7 @@ void MainComponent::showSetMenu()
     m.addItem (6, "Zoom in   (Ctrl +)");
     m.addItem (7, "Zoom out   (Ctrl -)");
     m.addItem (8, "Actual size   (Ctrl 0)");
+    m.addItem (14, "Rearrange groups to fit the window", true, liveSet.layoutWidth == 0);
 
     juce::PopupMenu themes;
     for (int i = 0; i < Theme::numPalettes; ++i)
@@ -753,6 +770,7 @@ void MainComponent::showSetMenu()
         if (r == 2) openSet();
         if (r == 10) renameSet();
         if (r == 12) undo();
+        if (r == 14) setRearrangeToFit (liveSet.layoutWidth > 0);
         if (r == 13) redo();
         if (r == 11) liveSet.getFolder().getChildFile ("Backups").revealToUser();
         if (r >= 400 && r < 400 + recentSets().size()) openSetFile (juce::File (recentSets()[r - 400]));
@@ -2467,14 +2485,17 @@ void MainComponent::layoutRows()
         bottom = juce::jmax (bottom, r.getBottom());
     }
 
-    rowsContent.setSize (rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2, bottom + 40);
+    // A fixed layout wider than the window scrolls sideways rather than rearranging.
+    const int windowWidth = rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2;
+    rowsViewport.setScrollBarsShown (true, liveSet.layoutWidth > 0);
+    rowsContent.setSize (juce::jmax (windowWidth, groupPageWidth()), bottom + 40);
 }
 
 std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, juce::Point<int> movingTo,
                                                                   std::map<int, juce::Point<int>>* wants) const
 {
     // Groups (row indices; live group g is -1 - g): see GroupLayout for the rules.
-    const int width = rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2;
+    const int width = groupPageWidth();
     const int rows = juce::jmin (rowViews.size(), (int) liveSet.rows.size());
     const int lives = juce::jmin (liveGroupViews.size(), (int) liveSet.liveGroups.size());
 

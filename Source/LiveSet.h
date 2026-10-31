@@ -206,6 +206,7 @@ struct LiveSet
     static constexpr TimeSignature timeSignatures[] = { { 2, 4 }, { 3, 4 }, { 4, 4 }, { 5, 4 }, { 6, 8 }, { 7, 8 } };
     LoopLength loopLength = LoopLength::free;
     std::shared_ptr<juce::XmlElement> midi;       // MIDI assigned to this set's channels and groups
+    int layoutWidth = 0;               // the groups' page width; 0 = the window's (they rearrange to fit it)
 
     static constexpr int maxRows = 8;  // one per MidiMix fader
     static constexpr const char* fileExtension = ".liverig";
