@@ -2170,6 +2170,36 @@ namespace FxSelfTest
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (image, out), "Samples panel drawn to " + file.getFullPathName());
         }
 
+        // ---- Undo: only edits make steps, not playing ----
+        {
+            LiveSet base = LiveSet::makeDefault();
+            base.rows[0].slots[0].file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pad.wav");
+            base.instruments.push_back ({});
+            base.scenes.push_back ({});
+            const auto text = [] (const LiveSet& s) { return LiveSet::editText (*s.toXml ({})); };
+            const auto before = text (base);
+
+            auto played = base;   // what happens while performing
+            played.rows[0].faderDb = -12.0;
+            played.rows[1].muted = true;
+            played.rows[0].slots[0].volumeDb = -6.0;
+            played.instruments[0].padRoot = 2;
+            played.instruments[0].padOctave = 5;
+            played.instruments[0].faderDb = -3.0;
+            played.bpm = 96.0;
+            played.scenes[0].channels.push_back ({ "x", true, -4.0 });
+            const bool playingIsNotAnEdit = text (played) == before;
+
+            auto renamed = base;  renamed.rows[0].name = "Drones";
+            auto fx = base;       fx.rows[0].slots[0].fx.reverbOn = true;
+            auto trimmed = base;  trimmed.rows[0].slots[0].shape.start = 0.5;
+            auto moved = base;    moved.rows[2].position = { 300, 40 };
+            const bool editsAre = text (renamed) != before && text (fx) != before && text (trimmed) != before && text (moved) != before;
+
+            check (playingIsNotAnEdit && editsAre,
+                   "Undo steps come from edits (names, effects, trims, layout), never from playing (faders, mutes, keys, tempo, scene mixes)");
+        }
+
         report.add ({});
         report.add (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED");
         return report.joinIntoString ("\n");

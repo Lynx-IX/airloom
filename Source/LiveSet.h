@@ -239,6 +239,11 @@ struct LiveSet
     void relocate (const std::map<juce::String, juce::File>& moved);
 
     std::unique_ptr<juce::XmlElement> toXml (const juce::File& baseFolder) const;
+
+    // The set as saved, minus what changes while performing (faders, mutes, monitoring, keys
+    // and octaves, instruments' own settings, tempo, scenes' contents): two sets with the same
+    // edit text differ only by playing, so there's nothing to undo between them.
+    static juce::String editText (const juce::XmlElement& setXml);
     void loadFromXml (const juce::XmlElement& xml, const juce::File& baseFolder);
 
     // Paths inside the set folder are stored relative to it so the folder can be moved.

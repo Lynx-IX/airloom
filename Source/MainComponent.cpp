@@ -712,6 +712,9 @@ void MainComponent::showSetMenu()
 
     juce::PopupMenu m;
     m.addSectionHeader (liveSet.getName());
+    m.addItem (12, "Undo   (Ctrl Z)", ! undoStack.empty());
+    m.addItem (13, "Redo   (Ctrl Y)", ! redoStack.empty());
+    m.addSeparator();
     m.addItem (1, "New set");
     m.addItem (2, "Open set...");
     m.addSeparator();
@@ -749,6 +752,8 @@ void MainComponent::showSetMenu()
         if (r == 1) newSet();
         if (r == 2) openSet();
         if (r == 10) renameSet();
+        if (r == 12) undo();
+        if (r == 13) redo();
         if (r == 11) liveSet.getFolder().getChildFile ("Backups").revealToUser();
         if (r >= 400 && r < 400 + recentSets().size()) openSetFile (juce::File (recentSets()[r - 400]));
         if (r == 3) saveSet (false);
@@ -811,6 +816,8 @@ void MainComponent::recallScene (int index)
 {
     if (! juce::isPositiveAndBelow (index, (int) liveSet.scenes.size()))
         return;
+
+    const juce::ScopedValueSetter<int> quiet (quietSaves, quietSaves + 1);   // a scene is played, not edited
 
     // Finish any morph still going, so this one starts from where things really are.
     if (! sceneGlides.empty())
@@ -977,6 +984,7 @@ void MainComponent::updateMorph()
 {
     if (sceneGlides.empty() && sceneFxGlides.empty())
         return;
+    const juce::ScopedValueSetter<int> quiet (quietSaves, quietSaves + 1);
 
     // Smooth in and out, so levels don't lurch at the start or stop dead at the end.
     const double t = morphMs <= 0.0 ? 1.0 : juce::jlimit (0.0, 1.0, (juce::Time::getMillisecondCounterHiRes() - morphStartMs) / morphMs);
@@ -1903,6 +1911,9 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
         errorMessage = juce::String (missing) + (missing == 1 ? " file in this set was" : " files in this set were") + " not found";
 
     restoring = false;
+    undoStack.clear();
+    redoStack.clear();
+    committed = {};
     saveSession();
     preloadAll();
     repaint();
@@ -1917,9 +1928,276 @@ void MainComponent::saveSession()
     props->setValue ("session", liveSet.toXml (liveSet.getFolder()).get());
     props->setValue ("setFile", liveSet.file.getFullPathName());
 
+    // Undo looks at this shortly (the timer, at most four times a second, so dragging a fader stays light).
+    undoCheckPending = true;
+    if (quietSaves > 0 || applyingUndo)
+        undoCheckQuiet = true;
+
     // The set file follows shortly (the timer writes it once changes settle).
     setFileDirty = true;
     lastChangeMs = juce::Time::getMillisecondCounter();
+}
+
+void MainComponent::recordUndoPoint()
+{
+    // An edit (not just playing) keeps the set as it was before it. Edits in quick succession
+    // (a knob being turned) are one step.
+    const auto xml = liveSet.toXml (liveSet.getFolder());
+    const UndoState now { xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader()), LiveSet::editText (*xml) };
+
+    if (committed.xml.isNotEmpty() && now.edit != committed.edit && ! undoCheckQuiet)
+    {
+        const auto ms = juce::Time::getMillisecondCounter();
+        if (undoStack.empty() || ms - lastUndoPushMs > undoMergeMs)
+        {
+            undoStack.push_back (committed);
+            if ((int) undoStack.size() > undoLimit)
+                undoStack.erase (undoStack.begin());
+        }
+        lastUndoPushMs = ms;
+        redoStack.clear();
+    }
+
+    committed = now;
+    undoCheckPending = undoCheckQuiet = false;
+    lastUndoCheckMs = juce::Time::getMillisecondCounter();
+}
+
+void MainComponent::undo()
+{
+    if (undoCheckPending)
+        recordUndoPoint();
+
+    if (undoStack.empty())
+    {
+        infoMessage = "Nothing to undo";
+        repaint();
+        return;
+    }
+    auto back = undoStack.back();
+    undoStack.pop_back();
+    redoStack.push_back (committed);
+    restoreEdit (back.xml);
+    infoMessage = "Undone" + juce::String (undoStack.empty() ? "" : "   (Ctrl Z for more, Ctrl Y to redo)");
+    repaint();
+}
+
+void MainComponent::redo()
+{
+    if (undoCheckPending)
+        recordUndoPoint();
+
+    if (redoStack.empty())
+    {
+        infoMessage = "Nothing to redo";
+        repaint();
+        return;
+    }
+    auto forward = redoStack.back();
+    redoStack.pop_back();
+    undoStack.push_back (committed);
+    restoreEdit (forward.xml);
+    infoMessage = "Redone";
+    repaint();
+}
+
+void MainComponent::restoreEdit (const juce::String& xmlText)
+{
+    auto xml = juce::parseXML (xmlText);
+    if (xml == nullptr)
+        return;
+
+    const juce::ScopedValueSetter<bool> undoing (applyingUndo, true);
+    if (looper.getState() == Looper::State::overdubbing)
+        stopOverdubbing();
+
+    LiveSet target;
+    target.loadFromXml (*xml, liveSet.getFolder());
+
+    auto findCurrentSlot = [this] (const juce::String& uid) -> std::pair<Row*, Slot*>
+    {
+        for (auto& r : liveSet.rows)
+            for (auto& s : r.slots)
+                if (s.uid == uid)
+                    return { &r, &s };
+        return { nullptr, nullptr };
+    };
+
+    // Channels and groups the undo takes away go quiet; their effects slots are freed.
+    std::set<juce::String> targetSlots, targetRows;
+    for (const auto& r : target.rows)
+    {
+        targetRows.insert (r.uid);
+        for (const auto& s : r.slots)
+            targetSlots.insert (s.uid);
+    }
+    for (auto& r : liveSet.rows)
+    {
+        if (targetRows.count (r.uid) == 0)
+        {
+            auto& engine = engineFor (r);
+            engine.stopAll (0.3);
+            engine.getFx().setSettings ({});
+            insertWindows.erase ("grp." + r.uid);
+            engine.getInsert().setPlugin (nullptr);
+            continue;
+        }
+        for (auto& s : r.slots)
+            if (targetSlots.count (s.uid) == 0)
+            {
+                if (s.playing)
+                    engineFor (r).stopLoop (s.id, 0.3);
+                engineFor (r).setOwnerFx (s.id, {});
+            }
+    }
+
+    // What stays keeps how it's playing: its engine, loop, timing, and the faders and mutes as they are now.
+    std::set<int> usedEngines;
+    for (auto& r : target.rows)
+        for (const auto& cur : liveSet.rows)
+            if (cur.uid == r.uid)
+            {
+                r.engine = cur.engine;
+                r.faderDb = cur.faderDb;
+                r.muted = cur.muted;
+                usedEngines.insert (cur.engine);
+            }
+    for (auto& r : target.rows)
+        if (r.engine < 0)
+            for (int e = 0; e < (int) engines.size(); ++e)
+                if (usedEngines.count (e) == 0) { r.engine = e; usedEngines.insert (e); break; }
+    target.rows.erase (std::remove_if (target.rows.begin(), target.rows.end(), [] (const Row& r) { return r.engine < 0; }),
+                       target.rows.end());
+
+    std::vector<std::pair<juce::String, juce::String>> reshaped;   // playing channels whose sound changes: uid, old clip key
+    for (auto& r : target.rows)
+        for (auto& s : r.slots)
+        {
+            auto [curRow, cur] = findCurrentSlot (s.uid);
+            if (cur == nullptr)
+                continue;
+
+            const bool sameSound = cur->file == s.file;
+            s.volumeDb = cur->volumeDb;
+            s.id = cur->id;
+
+            if (cur->playing && sameSound && curRow->engine == r.engine)
+            {
+                s.playing = true;
+                s.anchor = cur->anchor;
+                s.loading = cur->loading;
+                if (clipKey (*cur) == clipKey (s))
+                {
+                    s.liveClip = cur->liveClip;
+                    s.undoClip = cur->undoClip;
+                }
+                else
+                {
+                    reshaped.push_back ({ s.uid, clipKey (*cur) });
+                }
+            }
+            else if (cur->playing)
+            {
+                engineFor (*curRow).stopLoop (cur->id, 0.3);   // moved to another group, or a different sample now
+                engineFor (*curRow).setOwnerFx (cur->id, {});
+            }
+            else if (curRow->engine != r.engine)
+            {
+                engineFor (*curRow).setOwnerFx (cur->id, {});
+            }
+
+            if (! s.fx.isActive())
+                engineFor (r).setOwnerFx (s.id, {});
+        }
+
+    // Live groups keep their faders and mutes; inputs and instruments their settings unless the
+    // undo goes back past one being added or removed (that isn't undone).
+    for (auto& lg : target.liveGroups)
+        for (const auto& cur : liveSet.liveGroups)
+            if (cur.uid == lg.uid)
+            {
+                lg.faderDb = cur.faderDb;
+                lg.muted = cur.muted;
+            }
+
+    const bool sameInputs = target.inputs.size() == liveSet.inputs.size();
+    const bool sameInstruments = target.instruments.size() == liveSet.instruments.size();
+    if (sameInputs)
+        for (size_t i = 0; i < target.inputs.size(); ++i)
+        {
+            auto& in = liveSet.inputs[i];
+            const auto& t = target.inputs[i];
+            in.name = t.name;  in.group = t.group;  in.order = t.order;  in.fx = t.fx;
+            in.channel = t.channel;  in.stereo = t.stereo;  in.recordWithFx = t.recordWithFx;
+        }
+    if (sameInstruments)
+        for (size_t i = 0; i < target.instruments.size(); ++i)
+        {
+            auto& inst = liveSet.instruments[i];
+            const auto& t = target.instruments[i];
+            inst.label = t.label;  inst.group = t.group;  inst.order = t.order;  inst.fx = t.fx;
+            inst.recordWithFx = t.recordWithFx;  inst.midiSource = t.midiSource;  inst.midiSourceId = t.midiSourceId;
+        }
+
+    // Group plug-ins: a group brought back gets its plug-in again.
+    std::vector<std::pair<juce::String, LiveSet::PluginSlot>> reload;
+    for (const auto& r : target.rows)
+        if (std::none_of (liveSet.rows.begin(), liveSet.rows.end(), [&r] (const Row& cur) { return cur.uid == r.uid; })
+            && r.insert.xml.isNotEmpty())
+            reload.push_back ({ "grp." + r.uid, r.insert });
+
+    liveSet.rows = std::move (target.rows);
+    liveSet.liveGroups = std::move (target.liveGroups);
+    for (auto& in : liveSet.inputs)      if (liveSet.findLiveGroup (in.group) == nullptr)   in.group = {};
+    for (auto& inst : liveSet.instruments) if (liveSet.findLiveGroup (inst.group) == nullptr) inst.group = {};
+    liveSet.ensureLiveGroups();
+    liveSet.scenes = std::move (target.scenes);
+    liveSet.scenesKeepChanges = target.scenesKeepChanges;
+    liveSet.keyButtons = std::move (target.keyButtons);
+    liveSet.pool = std::move (target.pool);
+    liveSet.poolFolders = std::move (target.poolFolders);
+    if (target.midi != nullptr)
+        liveSet.midi = target.midi;
+
+    for (auto& [key, slot] : reload)
+    {
+        juce::PluginDescription description;
+        if (auto pluginXml = juce::parseXML (slot.xml); pluginXml != nullptr && description.loadFromXml (*pluginXml))
+            loadInsertPlugin (key, description, slot.state);
+    }
+
+    rebuildLiveGroups();
+    rebuildRows();
+    for (int i = 0; i < (int) liveSet.inputs.size(); ++i)
+        applyInput (i);
+    for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
+        applyInstrument (i);
+    refreshKeyButtons();
+    pool.setFiles (liveSet.pool);
+    updateSceneBar();
+
+    // Playing channels whose trim, fades, reverse or smoothing changed crossfade to the version they go back to.
+    for (const auto& [uid, oldKey] : reshaped)
+    {
+        int r = -1, s = -1;
+        if (! findSlotByUid (uid, r, s))
+            continue;
+        withClip (liveSet.rows[(size_t) r].slots[(size_t) s], [this, uid] (LoopClipPtr clip)
+        {
+            int rr = -1, ss = -1;
+            if (clip != nullptr && findSlotByUid (uid, rr, ss))
+                swapPlayingClip (liveSet.rows[(size_t) rr], liveSet.rows[(size_t) rr].slots[(size_t) ss], clip);
+        });
+    }
+
+    if (! sameInputs || ! sameInstruments)
+        errorMessage = "Undo can't add or remove inputs and instruments - those stay as they are";
+
+    layoutRows();
+    updateRowViews();
+    updateMidiLeds();
+    saveSession();
+    recordUndoPoint();   // quiet: the restored set is where history now stands
 }
 
 void MainComponent::writeSetFile()
@@ -5662,6 +5940,9 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         if (c == '=' || c == '+' || code == '=' || code == '+')  { setZoom (scale + 0.1f); return true; }
         if (c == '-' || code == '-')                             { setZoom (scale - 0.1f); return true; }
         if (c == '0' || code == '0')                             { setZoom (1.0f); return true; }
+        if ((code == 'Z' || code == 'z') && key.getModifiers().isShiftDown())   { redo(); return true; }
+        if (code == 'Z' || code == 'z')                          { undo(); return true; }
+        if (code == 'Y' || code == 'y')                          { redo(); return true; }
     }
 
     if (key == juce::KeyPress::F11Key)
@@ -6620,6 +6901,8 @@ void MainComponent::timerCallback()
 
     if (setFileDirty && juce::Time::getMillisecondCounter() - lastChangeMs > autosaveDelayMs)
         writeSetFile();
+    if (undoCheckPending && juce::Time::getMillisecondCounter() - lastUndoCheckMs > 250)
+        recordUndoPoint();
 
     // An effect that ran away was emptied on the audio thread; say so and keep a record.
     if (const int runaways = FxChain::runaways.load(); runaways != runawaysSeen)

@@ -204,6 +204,36 @@ juce::File LiveSet::decode (const juce::String& path, const juce::File& baseFold
     return baseFolder.getChildFile (path);
 }
 
+juce::String LiveSet::editText (const juce::XmlElement& setXml)
+{
+    juce::XmlElement copy (setXml);
+    for (const auto* a : { "bpm", "master", "fade", "loopStart" })
+        copy.removeAttribute (a);
+
+    std::function<void (juce::XmlElement&)> strip = [&strip] (juce::XmlElement& e)
+    {
+        const auto tag = e.getTagName();
+        if (tag == "Scene")
+            e.deleteAllChildElements();   // a scene's mix changes as it's played (keep changes)
+        if (tag == "Row" || tag == "LiveGroup")
+            for (const auto* a : { "fader", "mute" }) e.removeAttribute (a);
+        if (tag == "Input")
+            for (const auto* a : { "fader", "mute", "monitor" }) e.removeAttribute (a);
+        if (tag == "Instrument")
+            for (const auto* a : { "fader", "mute", "state", "padRoot", "padScale", "padOctave", "anyKey" }) e.removeAttribute (a);
+        for (auto* child : e.getChildIterator())
+            strip (*child);
+    };
+    strip (copy);
+
+    // Channel volumes sit on Row's children; scenes' channels were emptied above.
+    for (auto* row : copy.getChildWithTagNameIterator ("Row"))
+        for (auto* ch : row->getChildWithTagNameIterator ("Channel"))
+            ch->removeAttribute ("volume");
+
+    return copy.toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
+}
+
 std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) const
 {
     auto xml = std::make_unique<juce::XmlElement> ("LiveRigSet");

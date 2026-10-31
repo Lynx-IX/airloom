@@ -448,6 +448,12 @@ saved automatically, so the app reopens exactly where you left off.
   (or a crash) never loses work. Before overwriting, Airloom keeps a dated copy in a **Backups** folder beside the set
   (at most one every 10 minutes, the newest 20) - **Set > Show backups**, then open any of them like a set. A set that
   has never been saved is kept in the session; **New set** or **Open set** asks before replacing it.
+- **Undo / Redo:** **Ctrl Z** and **Ctrl Y** (or Ctrl Shift Z; also at the top of the Set menu), up to 60 steps.
+  Edits are undone - loading or clearing samples, moving and renaming channels and groups, effects, trims, layout,
+  scenes added or removed, folders - while what's playing keeps playing in time, faders and mutes stay where they
+  are and plug-ins stay loaded. Playing isn't undone: faders, mutes, starting and stopping loops, scene recalls, keys,
+  octaves and tempo. Changes in quick succession (turning a knob) are one step. Adding or removing an input or
+  instrument isn't undone (their settings are). Opening a set starts its own history.
 - **Set > Rename set...** renames the set's file (its folder stays as it is); **Set > Open recent** lists the last 8.
 
 - **Set > Save set as new folder...** creates a folder and gathers every sample into it - one subfolder per group,

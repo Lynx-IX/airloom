@@ -147,6 +147,22 @@ private:
 
     // Keeping work safe: a saved set's file is rewritten a moment after any change (with dated
     // backups beside it); leaving an untitled set that has something in it asks first.
+    // Undo: each edit (not performance moves) keeps the set as it was before; undo and redo put
+    // it back softly - what's playing keeps playing, faders and mutes stay, plug-ins stay loaded.
+    struct UndoState { juce::String xml, edit; };
+    std::vector<UndoState> undoStack, redoStack;
+    UndoState committed;                 // the set as of the last save
+    juce::uint32 lastUndoPushMs = 0;
+    int quietSaves = 0;                  // > 0: saves that are performance (scene recalls), never undo steps
+    bool applyingUndo = false;
+    bool undoCheckPending = false, undoCheckQuiet = false;   // a save since the last check (quiet: performance only)
+    juce::uint32 lastUndoCheckMs = 0;
+    void recordUndoPoint();   // compares the set with the last check; an edit keeps the state before it
+    static constexpr int undoLimit = 60;
+    static constexpr juce::uint32 undoMergeMs = 700;   // changes this close together are one step (a knob being dragged)
+    void undo();
+    void redo();
+    void restoreEdit (const juce::String& xmlText);
     void writeSetFile();                                  // now, if there are unsaved changes
     void backUpSetFile();
     bool setHasContent() const;
