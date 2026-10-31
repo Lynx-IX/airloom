@@ -5,6 +5,7 @@ LoopChannel::LoopChannel()
     for (auto& o : loopOwners) o = -1;
     for (auto& o : shotOwners) o = -1;
     for (auto& o : fxOwners)   o = -1;
+    for (auto& v : channelFxVolume) v = 1.0f;
 }
 
 void LoopChannel::prepare (double sampleRate, int maxBlockSize)
@@ -22,10 +23,20 @@ void LoopChannel::prepare (double sampleRate, int maxBlockSize)
     {
         channelFx[k].prepare (sampleRate, size);
         channelFxBuffers[k].setSize (2, size);
+        channelFxVolumeRamp[k].reset (sampleRate, 0.05);
+        channelFxVolumeRamp[k].setCurrentAndTargetValue (channelFxVolume[k].load());
     }
 
     gain.reset (sampleRate, 0.05);
     gain.setCurrentAndTargetValue (muted ? 0.0f : targetGain.load());
+}
+
+float LoopChannel::voiceGainFor (int owner) const
+{
+    if (fxSlotFor (owner) >= 0)
+        return 1.0f;
+    const auto it = ownerVolume.find (owner);
+    return it != ownerVolume.end() ? it->second : 1.0f;
 }
 
 int LoopChannel::fxSlotFor (int owner) const
@@ -76,6 +87,14 @@ void LoopChannel::process (juce::AudioBuffer<float>& out, int startSample, int n
                 continue;
 
             channelFx[k].process (channelFxBuffers[k], 0, num);
+
+            // The channel's volume, after its effects: a fader turns the tails down too.
+            if (channelFxVolumeSnap[k].exchange (false))
+                channelFxVolumeRamp[k].setCurrentAndTargetValue (channelFxVolume[k].load());
+            else
+                channelFxVolumeRamp[k].setTargetValue (channelFxVolume[k].load());
+            channelFxVolumeRamp[k].applyGain (channelFxBuffers[k], num);
+
             const float fxPeak = juce::jmax (channelFxBuffers[k].getMagnitude (0, 0, num), channelFxBuffers[k].getMagnitude (1, 0, num));
             channelFxPeaks[k] = juce::jmax (channelFxPeaks[k].load(), fxPeak);
             for (int ch = 0; ch < 2; ++ch)
@@ -137,8 +156,11 @@ bool LoopChannel::startLoop (int owner, LoopClipPtr clip, double seconds, float 
             continue;
 
         loopOwners[i] = owner;
+        ownerVolume[owner] = voiceGain;
+        if (const int k = fxSlotFor (owner); k >= 0)
+            channelFxVolume[(size_t) k] = voiceGain;
         p.setLooping (true);
-        p.setVoiceGain (voiceGain, true);
+        p.setVoiceGain (voiceGainFor (owner), true);
         p.setClip (std::move (clip), anchor);
         p.fadeTo (1.0f, seconds, startAt);
         return true;
@@ -201,14 +223,24 @@ void LoopChannel::triggerShot (int owner, LoopClipPtr clip, float voiceGain)
 
     auto& p = shots[(size_t) voice];
     shotOwners[(size_t) voice] = owner;
+    ownerVolume[owner] = voiceGain;
+    if (const int k = fxSlotFor (owner); k >= 0)
+        channelFxVolume[(size_t) k] = voiceGain;
     p.setLooping (false);
-    p.setVoiceGain (voiceGain, true);
+    p.setVoiceGain (voiceGainFor (owner), true);
     p.setClip (std::move (clip));
     p.fadeTo (1.0f, 0.0);
 }
 
 void LoopChannel::setOwnerGain (int owner, float voiceGain)
 {
+    ownerVolume[owner] = voiceGain;
+    if (const int k = fxSlotFor (owner); k >= 0)
+    {
+        channelFxVolume[(size_t) k] = voiceGain;
+        return;
+    }
+
     for (size_t i = 0; i < loops.size(); ++i)
         if (loopOwners[i] == owner && loops[i].getFadeTarget() > 0.0f)
             loops[i].setVoiceGain (voiceGain);
@@ -216,6 +248,18 @@ void LoopChannel::setOwnerGain (int owner, float voiceGain)
     for (size_t i = 0; i < shots.size(); ++i)
         if (shotOwners[i] == owner)
             shots[i].setVoiceGain (voiceGain);
+}
+
+// The owner's voices at the gain they should have now (after its effects were added or removed).
+void LoopChannel::refreshOwnerVoices (int owner)
+{
+    const float g = voiceGainFor (owner);
+    for (size_t i = 0; i < loops.size(); ++i)
+        if (loopOwners[i] == owner)
+            loops[i].setVoiceGain (g);
+    for (size_t i = 0; i < shots.size(); ++i)
+        if (shotOwners[i] == owner)
+            shots[i].setVoiceGain (g);
 }
 
 bool LoopChannel::setOwnerFx (int owner, const FxSettings& settings)
@@ -228,6 +272,7 @@ bool LoopChannel::setOwnerFx (int owner, const FxSettings& settings)
         {
             channelFx[(size_t) slot].setSettings (settings);
             fxOwners[(size_t) slot] = -1;
+            refreshOwnerVoices (owner);   // its volume goes back onto the voices
         }
         return true;
     }
@@ -240,6 +285,17 @@ bool LoopChannel::setOwnerFx (int owner, const FxSettings& settings)
 
         if (slot < 0)
             return false;
+
+        // A fresh owner starts with empty tails, not whatever the slot last played, and
+        // its volume moves to after the effects.
+        channelFx[(size_t) slot].requestClear();
+        const auto it = ownerVolume.find (owner);
+        channelFxVolume[(size_t) slot] = it != ownerVolume.end() ? it->second : 1.0f;
+        channelFxVolumeSnap[(size_t) slot] = true;
+        channelFx[(size_t) slot].setSettings (settings);
+        fxOwners[(size_t) slot] = owner;
+        refreshOwnerVoices (owner);
+        return true;
     }
 
     channelFx[(size_t) slot].setSettings (settings);

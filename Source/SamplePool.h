@@ -1,13 +1,17 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "LiveSet.h"
 #include "Theme.h"
 
-// Side panel listing every sample loaded into the set. Files or folders can be
-// dropped on it (or added with the buttons); samples are dragged from it onto
-// channels and keys.
+// Side panel listing every sample loaded into the set, in folders: each sample under the
+// folder it's in on disk, or one of the panel's own it's been moved to (the set keeps those;
+// files are never moved). Click a folder to open or close it; right-click for its menu; drop
+// samples on it to move them there. Files or folders can be dropped on the panel (or added
+// with the buttons); samples are dragged from it onto channels and keys.
 class SamplePool : public juce::Component,
                    public juce::FileDragAndDropTarget,
+                   public juce::DragAndDropTarget,
                    private juce::ListBoxModel
 {
 public:
@@ -64,12 +68,16 @@ public:
     std::function<void (const juce::Array<juce::File>&)> onFilesAdded;
     std::function<void (const juce::Array<juce::File>&)> onRightClick;
     std::function<juce::String (const juce::File&)> describeUsage;   // e.g. "C 1, Nature"
+    std::function<bool (const juce::File&)> isPlaying;               // on a channel that's playing
+    std::function<void()> onFoldersChanged;                          // the folders changed: save the set
+
+    // The set's folders, which the panel shows and changes (it must outlive the panel's use of it).
+    void setFolders (LiveSet::PoolFolders* newFolders)   { folders = newFolders; rebuild(); }
 
     void setFiles (const juce::Array<juce::File>& newFiles)
     {
         files = newFiles;
-        list.updateContent();
-        list.repaint();
+        rebuild();
         emptyHint.setVisible (files.isEmpty() && ! collapsed);
         repaint();
     }
@@ -79,10 +87,51 @@ public:
     juce::Array<juce::File> getSelectedFiles() const
     {
         juce::Array<juce::File> selected;
-        for (int i = 0; i < files.size(); ++i)
-            if (list.isRowSelected (i))
-                selected.add (files[i]);
+        for (int r = 0; r < (int) rows.size(); ++r)
+            if (list.isRowSelected (r) && rows[(size_t) r].file >= 0)
+                selected.add (files[rows[(size_t) r].file]);
         return selected;
+    }
+
+    // The folder a sample is shown in.
+    juce::String folderOf (const juce::File& f) const
+    {
+        if (folders != nullptr)
+            if (const auto it = folders->moved.find (f.getFullPathName()); it != folders->moved.end())
+                return it->second;
+        return f.getParentDirectory().getFileName();
+    }
+
+    juce::StringArray folderNames() const
+    {
+        juce::StringArray names;
+        for (const auto& r : rows)
+            if (r.file < 0)
+                names.add (r.folder);
+        return names;
+    }
+
+    void moveToFolder (const juce::Array<juce::File>& toMove, const juce::String& folder)
+    {
+        if (folders == nullptr || folder.trim().isEmpty())
+            return;
+        for (const auto& f : toMove)
+        {
+            if (f.getParentDirectory().getFileName() == folder && ! folders->made.contains (folder))
+                folders->moved.erase (f.getFullPathName());   // back where it is on disk
+            else
+                folders->moved[f.getFullPathName()] = folder;
+        }
+        folders->closed.removeString (folder);   // show where they went
+        changed();
+    }
+
+    void makeFolder (const juce::String& name)
+    {
+        if (folders == nullptr || name.trim().isEmpty())
+            return;
+        folders->made.addIfNotAlreadyThere (name.trim());
+        changed();
     }
 
     // Audio files among the paths, searching dropped folders recursively.
@@ -127,6 +176,33 @@ public:
             onFilesAdded (found);
     }
 
+    // Samples dragged from the panel onto a folder move into it.
+    bool isInterestedInDragSource (const SourceDetails& d) override
+    {
+        return d.description.toString().startsWith (dragPrefix);
+    }
+
+    void itemDragMove (const SourceDetails& d) override
+    {
+        const int row = headerRowAt (d.localPosition);
+        if (row != dropFolderRow) { dropFolderRow = row; list.repaint(); }
+    }
+
+    void itemDragExit (const SourceDetails&) override
+    {
+        dropFolderRow = -1;
+        list.repaint();
+    }
+
+    void itemDropped (const SourceDetails& d) override
+    {
+        const int row = headerRowAt (d.localPosition);
+        dropFolderRow = -1;
+        list.repaint();
+        if (row >= 0)
+            moveToFolder (filesFromDragDescription (d.description), rows[(size_t) row].folder);
+    }
+
     void paint (juce::Graphics& g) override
     {
         Theme::drawSurface (g, getLocalBounds().toFloat(), Theme::panel, 8.0f);
@@ -151,7 +227,7 @@ public:
         g.setColour (Theme::textDim);
         g.setFont (juce::FontOptions (14.0f));
         g.drawText (juce::String (files.size()), titleArea, juce::Justification::centredRight);
-        g.drawFittedText ("Drag onto a channel or key. Right-click for more.", hintArea, juce::Justification::centred, 2);
+        g.drawFittedText ("Drag onto a channel, key or folder. Right-click for more.", hintArea, juce::Justification::centred, 2);
 
         if (dragOver)
         {
@@ -186,13 +262,161 @@ public:
     }
 
 private:
-    int getNumRows() override   { return files.size(); }
+    // A line of the list: a folder's header (file -1) or one of its samples.
+    struct Line { juce::String folder; int file = -1; int count = 0; bool playing = false; };
 
-    void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
+    void changed()
     {
-        if (! juce::isPositiveAndBelow (row, files.size()))
-            return;
+        rebuild();
+        if (onFoldersChanged)
+            onFoldersChanged();
+    }
 
+    void rebuild()
+    {
+        std::map<juce::String, std::vector<int>> byFolder;   // sorted by folder name
+        for (int i = 0; i < files.size(); ++i)
+            byFolder[folderOf (files[i])].push_back (i);
+        if (folders != nullptr)
+            for (const auto& name : folders->made)
+                byFolder[name];   // an empty folder of the panel's own still shows
+
+        rows.clear();
+        for (const auto& [folder, members] : byFolder)
+        {
+            rows.push_back ({ folder, -1, (int) members.size() });
+            if (folders == nullptr || ! folders->closed.contains (folder))
+                for (int i : members)
+                    rows.push_back ({ folder, i });
+        }
+        list.updateContent();
+        list.repaint();
+    }
+
+    bool folderPlaying (const juce::String& folder) const
+    {
+        if (! isPlaying)
+            return false;
+        for (const auto& f : files)
+            if (folderOf (f) == folder && isPlaying (f))
+                return true;
+        return false;
+    }
+
+    int headerRowAt (juce::Point<int> posInPanel) const
+    {
+        const auto p = list.getLocalPoint (this, posInPanel);
+        const int row = list.getRowContainingPosition (p.x, p.y);
+        return juce::isPositiveAndBelow (row, (int) rows.size()) && rows[(size_t) row].file < 0 ? row : -1;
+    }
+
+    void showFolderMenu (const juce::String& folder)
+    {
+        if (folders == nullptr)
+            return;
+        const bool own = folders->made.contains (folder);
+        const bool anyMoved = std::any_of (folders->moved.begin(), folders->moved.end(), [&] (const auto& m) { return m.second == folder; });
+
+        juce::PopupMenu m;
+        m.addSectionHeader (folder);
+        m.addItem (1, "Rename...");
+        m.addItem (2, "Remove folder (its samples go back to their own folders)", own || anyMoved);
+        m.addSeparator();
+        m.addItem (3, "New folder...");
+        m.showMenuAsync (juce::PopupMenu::Options(), [this, folder] (int r)
+        {
+            if (r == 1 || r == 3)
+            {
+                auto* w = new juce::AlertWindow (r == 1 ? "Rename folder" : "New folder", {}, juce::MessageBoxIconType::NoIcon);
+                w->addTextEditor ("name", r == 1 ? folder : juce::String());
+                w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+                w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+                juce::Component::SafePointer<SamplePool> safe (this);
+                w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, w, r, folder] (int result)
+                {
+                    const auto name = w->getTextEditorContents ("name").trim();
+                    if (auto* self = safe.getComponent(); self != nullptr && result == 1 && name.isNotEmpty())
+                    {
+                        if (r == 3)
+                            self->makeFolder (name);
+                        else
+                            self->renameFolder (folder, name);
+                    }
+                }), true);
+            }
+            if (r == 2)
+                removeFolder (folder);
+        });
+    }
+
+    void renameFolder (const juce::String& from, const juce::String& to)
+    {
+        if (folders == nullptr || from == to)
+            return;
+        for (const auto& f : files)   // a folder from disk is renamed by moving its samples into one named so
+            if (folderOf (f) == from)
+                folders->moved[f.getFullPathName()] = to;
+        if (folders->made.contains (from))
+            folders->made.set (folders->made.indexOf (from), to);
+        else
+            folders->made.addIfNotAlreadyThere (to);
+        if (folders->closed.contains (from))
+            folders->closed.set (folders->closed.indexOf (from), to);
+        changed();
+    }
+
+    void removeFolder (const juce::String& folder)
+    {
+        if (folders == nullptr)
+            return;
+        for (auto it = folders->moved.begin(); it != folders->moved.end();)
+            it = it->second == folder ? folders->moved.erase (it) : std::next (it);
+        folders->made.removeString (folder);
+        folders->closed.removeString (folder);
+        changed();
+    }
+
+    int getNumRows() override   { return (int) rows.size(); }
+
+    void paintListBoxItem (int line, juce::Graphics& g, int width, int height, bool selected) override
+    {
+        if (! juce::isPositiveAndBelow (line, (int) rows.size()))
+            return;
+        const auto& r = rows[(size_t) line];
+
+        if (r.file < 0)
+        {
+            // A folder: open/closed arrow, name, a dot while something in it plays, how many.
+            const bool open = folders == nullptr || ! folders->closed.contains (r.folder);
+            auto area = juce::Rectangle<int> (0, 0, width, height).reduced (4, 3);
+            if (line == dropFolderRow)
+            {
+                g.setColour (Theme::accent.withAlpha (0.22f));
+                g.fillRoundedRectangle (area.toFloat(), 4.0f);
+            }
+            const auto c = area.removeFromLeft (16).toFloat().getCentre();
+            juce::Path arrow;
+            if (open) arrow.addTriangle (c.x - 4.0f, c.y - 2.5f, c.x + 4.0f, c.y - 2.5f, c.x, c.y + 3.0f);
+            else      arrow.addTriangle (c.x - 2.5f, c.y - 4.0f, c.x - 2.5f, c.y + 4.0f, c.x + 3.0f, c.y);
+            g.setColour (Theme::textDim);
+            g.fillPath (arrow);
+
+            g.setFont (juce::FontOptions (13.0f));
+            g.drawText (juce::String (r.count), area.removeFromRight (30), juce::Justification::centredRight);
+            if (folderPlaying (r.folder))
+            {
+                g.setColour (Theme::accent);
+                g.fillEllipse (area.removeFromRight (14).toFloat().withSizeKeepingCentre (6.0f, 6.0f));
+            }
+            g.setColour (Theme::text.withAlpha (0.9f));
+            g.setFont (Theme::heading (12.5f, 0.08f));
+            g.drawText (r.folder.toUpperCase(), area.withTrimmedLeft (4), juce::Justification::centredLeft, true);
+            g.setColour (Theme::panelEdge);
+            g.fillRect (4, height - 1, width - 8, 1);
+            return;
+        }
+
+        const int row = r.file;
         if (selected)
         {
             g.setColour (Theme::accent.withAlpha (0.14f));
@@ -211,28 +435,51 @@ private:
 
         g.setColour (usage.isNotEmpty() ? Theme::text : Theme::text.withAlpha (0.75f));
         g.setFont (juce::FontOptions (14.5f));
-        g.drawText (files[row].getFileNameWithoutExtension(), area, juce::Justification::centredLeft, true);
+        g.drawText (files[row].getFileNameWithoutExtension(), area.withTrimmedLeft (14), juce::Justification::centredLeft, true);
     }
 
-    void listBoxItemClicked (int row, const juce::MouseEvent& e) override
+    void listBoxItemClicked (int line, const juce::MouseEvent& e) override
     {
+        if (! juce::isPositiveAndBelow (line, (int) rows.size()))
+            return;
+
+        if (rows[(size_t) line].file < 0)
+        {
+            // A folder: a click opens or closes it, a right-click is its menu.
+            const auto folder = rows[(size_t) line].folder;
+            list.deselectRow (line);
+            if (e.mods.isPopupMenu())
+            {
+                showFolderMenu (folder);
+            }
+            else if (folders != nullptr)
+            {
+                if (folders->closed.contains (folder)) folders->closed.removeString (folder);
+                else                                   folders->closed.add (folder);
+                changed();
+            }
+            return;
+        }
+
         if (! e.mods.isPopupMenu())
             return;
 
-        if (! list.isRowSelected (row))
-            list.selectRow (row);
+        if (! list.isRowSelected (line))
+            list.selectRow (line);
 
         if (onRightClick)
             onRightClick (getSelectedFiles());
     }
 
-    juce::var getDragSourceDescription (const juce::SparseSet<int>& rows) override
+    juce::var getDragSourceDescription (const juce::SparseSet<int>& selectedRows) override
     {
         juce::StringArray paths;
-        for (int i = 0; i < rows.size(); ++i)
-            if (juce::isPositiveAndBelow (rows[i], files.size()))
-                paths.add (files[rows[i]].getFullPathName());
+        for (int i = 0; i < selectedRows.size(); ++i)
+            if (juce::isPositiveAndBelow (selectedRows[i], (int) rows.size()) && rows[(size_t) selectedRows[i]].file >= 0)
+                paths.add (files[rows[(size_t) selectedRows[i]].file].getFullPathName());
 
+        if (paths.isEmpty())
+            return {};
         return dragPrefix + paths.joinIntoString ("\n");
     }
 
@@ -264,6 +511,9 @@ private:
 
     juce::AudioFormatManager& formatManager;
     juce::Array<juce::File> files;
+    std::vector<Line> rows;
+    LiveSet::PoolFolders* folders = nullptr;
+    int dropFolderRow = -1;
 
     juce::TextButton addFilesButton { "Add files" }, addFolderButton { "Add folder" };
     juce::ListBox list;

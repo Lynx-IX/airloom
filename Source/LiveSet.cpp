@@ -50,9 +50,52 @@ std::vector<LiveSet::Input> LiveSet::defaultInputs()
     return in;
 }
 
+LiveSet::LiveGroup* LiveSet::findLiveGroup (const juce::String& uid)
+{
+    for (auto& g : liveGroups)
+        if (g.uid == uid)
+            return &g;
+    return nullptr;
+}
+
+LiveSet::LiveGroup* LiveSet::firstLiveGroup (bool wantInstruments)
+{
+    for (auto& g : liveGroups)
+        if (g.instruments == wantInstruments)
+            return &g;
+    return nullptr;
+}
+
+void LiveSet::ensureLiveGroups()
+{
+    auto ensure = [this] (bool wantInstruments) -> juce::String
+    {
+        if (auto* g = firstLiveGroup (wantInstruments))
+            return g->uid;
+
+        LiveGroup g;
+        g.instruments = wantInstruments;
+        g.name = wantInstruments ? "Instruments" : "Inputs";
+        g.colour = wantInstruments ? 5 : 4;   // teal, rose
+        liveGroups.push_back (g);
+        return g.uid;
+    };
+
+    const auto inputsUid = ensure (false);
+    const auto instrumentsUid = ensure (true);
+
+    for (auto& in : inputs)
+        if (findLiveGroup (in.group) == nullptr)
+            in.group = inputsUid;
+    for (auto& inst : instruments)
+        if (findLiveGroup (inst.group) == nullptr)
+            inst.group = instrumentsUid;
+}
+
 LiveSet LiveSet::makeDefault()
 {
     LiveSet set;
+    set.ensureLiveGroups();
     set.rows.push_back (makeRow ("Pads", false));
     set.rows.push_back (makeRow ("Ambient", false));
     set.rows.push_back (makeRow ("Tones", false));
@@ -128,6 +171,15 @@ void LiveSet::relocate (const std::map<juce::String, juce::File>& moved)
 
     for (auto& f : pool)
         update (f);
+
+    // Samples moved to the panel's own folders stay there wherever their files went.
+    std::map<juce::String, juce::String> remapped;
+    for (const auto& [path, folder] : poolFolders.moved)
+    {
+        const auto it = moved.find (path);
+        remapped[it != moved.end() ? it->second.getFullPathName() : path] = folder;
+    }
+    poolFolders.moved = std::move (remapped);
 }
 
 juce::String LiveSet::encode (const juce::File& f, const juce::File& baseFolder)
@@ -163,9 +215,6 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     xml->setAttribute ("beatsPerBar", beatsPerBar);
     xml->setAttribute ("beatUnit", beatUnit);
     xml->setAttribute ("loopLength", (int) loopLength);
-    xml->setAttribute ("inputsX", inputsPosition.x);
-    xml->setAttribute ("inputsY", inputsPosition.y);
-    xml->setAttribute ("inputsColumns", inputsColumns);
     space.addToXml (*xml->createNewChildElement ("Space"));
 
     auto* scenesXml = xml->createNewChildElement ("Scenes");
@@ -182,6 +231,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
             ce->setAttribute ("uid", c.uid);
             ce->setAttribute ("playing", c.playing);
             ce->setAttribute ("volume", c.volumeDb);
+            if (c.hasFx) c.fx.addToXml (*ce);
         }
         for (const auto& gr : sc.groups)
         {
@@ -189,6 +239,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
             ge->setAttribute ("uid", gr.uid);
             ge->setAttribute ("fader", gr.faderDb);
             ge->setAttribute ("muted", gr.muted);
+            if (gr.hasFx) gr.fx.addToXml (*ge);
         }
         for (const auto& st : sc.strips)
         {
@@ -197,6 +248,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
             se->setAttribute ("index", st.index);
             se->setAttribute ("fader", st.faderDb);
             se->setAttribute ("muted", st.muted);
+            if (st.hasFx) st.fx.addToXml (*se);
         }
         for (const auto& k : sc.keys)
         {
@@ -205,6 +257,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
             ke->setAttribute ("root", k.root);
             ke->setAttribute ("scale", k.scale);
             ke->setAttribute ("octave", k.octave);
+            ke->setAttribute ("anyKey", k.anyKey);
         }
     }
     masterInsert.addToXml (*xml);
@@ -234,6 +287,14 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
             se->setAttribute ("volume", s.volumeDb);
             se->setAttribute ("smooth", s.smoothSeconds);
             se->setAttribute ("reverse", s.reverse);
+            if (s.shape.isSet())
+            {
+                se->setAttribute ("trimStart", s.shape.start);
+                se->setAttribute ("trimEnd", s.shape.end);
+                se->setAttribute ("fadeIn", s.shape.fadeIn);
+                se->setAttribute ("fadeOut", s.shape.fadeOut);
+                se->setAttribute ("sampleGain", s.shape.gainDb);
+            }
             se->setAttribute ("uid", s.uid);
             if (s.fx.isActive())
                 s.fx.addToXml (*se);
@@ -243,10 +304,37 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     if (midi != nullptr)
         xml->addChildElement (new juce::XmlElement (*midi));
 
+    auto* keysXml = xml->createNewChildElement ("KeyButtons");
+    for (const auto& k : keyButtons)
+    {
+        auto* ke = keysXml->createNewChildElement ("KeyButton");
+        ke->setAttribute ("root", k.root);
+        ke->setAttribute ("scale", k.scale);
+    }
+
+    auto* liveXml = xml->createNewChildElement ("LiveGroups");
+    for (const auto& g : liveGroups)
+    {
+        auto* ge = liveXml->createNewChildElement ("LiveGroup");
+        ge->setAttribute ("name", g.name);
+        ge->setAttribute ("uid", g.uid);
+        ge->setAttribute ("instruments", g.instruments);
+        ge->setAttribute ("colour", g.colour);
+        ge->setAttribute ("fader", g.faderDb);
+        ge->setAttribute ("mute", g.muted);
+        ge->setAttribute ("columns", g.columns);
+        ge->setAttribute ("collapsed", g.collapsed);
+        ge->setAttribute ("x", g.position.x);
+        ge->setAttribute ("y", g.position.y);
+        g.fx.addToXml (*ge);
+    }
+
     for (auto& in : inputs)
     {
         auto* ie = xml->createNewChildElement ("Input");
         ie->setAttribute ("name", in.name);
+        ie->setAttribute ("group", in.group);
+        ie->setAttribute ("order", in.order);
         ie->setAttribute ("channel", in.channel);
         ie->setAttribute ("stereo", in.stereo);
         ie->setAttribute ("fader", in.faderDb);
@@ -270,11 +358,14 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
         auto* e = xml->createNewChildElement ("Instrument");
         e->setAttribute ("name", inst.name);
         e->setAttribute ("label", inst.label);
+        e->setAttribute ("group", inst.group);
+        e->setAttribute ("order", inst.order);
         e->setAttribute ("fader", inst.faderDb);
         e->setAttribute ("mute", inst.muted);
         e->setAttribute ("recordWithFx", inst.recordWithFx);
         e->setAttribute ("midiSource", inst.midiSource);
         e->setAttribute ("midiSourceId", inst.midiSourceId);
+        e->setAttribute ("anyKey", inst.anyKey);
         e->setAttribute ("padRoot", inst.padRoot);
         e->setAttribute ("padScale", inst.padScale);
         e->setAttribute ("padOctave", inst.padOctave);
@@ -287,6 +378,18 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
     auto* pe = xml->createNewChildElement ("Pool");
     for (auto& f : pool)
         pe->createNewChildElement ("File")->setAttribute ("path", encode (f, baseFolder));
+
+    auto* fe = xml->createNewChildElement ("PoolFolders");
+    for (const auto& [path, folder] : poolFolders.moved)
+    {
+        auto* m = fe->createNewChildElement ("Moved");
+        m->setAttribute ("path", encode (juce::File (path), baseFolder));
+        m->setAttribute ("folder", folder);
+    }
+    for (const auto& name : poolFolders.made)
+        fe->createNewChildElement ("Made")->setAttribute ("name", name);
+    for (const auto& name : poolFolders.closed)
+        fe->createNewChildElement ("Closed")->setAttribute ("name", name);
 
     return xml;
 }
@@ -302,11 +405,54 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     beatsPerBar = juce::jlimit (1, 16, xml.getIntAttribute ("beatsPerBar", 4));
     beatUnit = xml.getIntAttribute ("beatUnit", 4) == 8 ? 8 : 4;
     loopLength = (LoopLength) juce::jlimit (0, 2, xml.getIntAttribute ("loopLength", 0));
-    inputsPosition = { xml.getIntAttribute ("inputsX", -1), xml.getIntAttribute ("inputsY", -1) };
     midi.reset();
     if (auto* m = xml.getChildByName ("MidiMap"))
         midi = std::make_shared<juce::XmlElement> (*m);
-    inputsColumns = juce::jmax (0, xml.getIntAttribute ("inputsColumns", 0));
+
+    keyButtons.clear();
+    if (auto* keysXml = xml.getChildByName ("KeyButtons"))
+    {
+        for (auto* ke : keysXml->getChildWithTagNameIterator ("KeyButton"))
+            keyButtons.push_back ({ juce::jlimit (0, 11, ke->getIntAttribute ("root")), juce::jmax (0, ke->getIntAttribute ("scale")) });
+    }
+    else
+    {
+        // A set from before key buttons were its own: the three flute keys it always had.
+        keyButtons = { { 9, 0 }, { 10, 1 }, { 4, 1 } };   // A minor, Bb major, E major pentatonic
+    }
+
+    liveGroups.clear();
+    if (auto* liveXml = xml.getChildByName ("LiveGroups"))
+    {
+        for (auto* ge : liveXml->getChildWithTagNameIterator ("LiveGroup"))
+        {
+            if ((int) liveGroups.size() >= maxLiveGroups)
+                break;
+            LiveGroup g;
+            g.name = ge->getStringAttribute ("name", "Live");
+            g.uid = ge->getStringAttribute ("uid", g.uid);
+            g.instruments = ge->getBoolAttribute ("instruments");
+            g.colour = juce::jmax (0, ge->getIntAttribute ("colour", g.colour));
+            g.faderDb = ge->getDoubleAttribute ("fader");
+            g.muted = ge->getBoolAttribute ("mute");
+            g.columns = juce::jmax (0, ge->getIntAttribute ("columns"));
+            g.collapsed = ge->getBoolAttribute ("collapsed");
+            g.position = { ge->getIntAttribute ("x", -1), ge->getIntAttribute ("y", -1) };
+            g.fx = FxSettings::fromXml (ge->getChildByName ("Fx"));
+            liveGroups.push_back (std::move (g));
+        }
+    }
+    else
+    {
+        // A set from before live groups: the old Inputs panel's place and width go to its
+        // inputs; the instruments get a group of their own beside it.
+        LiveGroup inputsGroup;
+        inputsGroup.name = "Inputs";
+        inputsGroup.colour = 4;
+        inputsGroup.position = { xml.getIntAttribute ("inputsX", -1), xml.getIntAttribute ("inputsY", -1) };
+        inputsGroup.columns = juce::jmax (0, xml.getIntAttribute ("inputsColumns", 0));
+        liveGroups.push_back (inputsGroup);
+    }
     {
         const auto* se = xml.getChildByName ("Space");
         space = FxSettings::fromXml (se != nullptr ? se->getChildByName ("Fx") : nullptr, SpaceReverb::defaults());
@@ -323,18 +469,35 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
             sc.name = e->getStringAttribute ("name", "Scene");
             sc.uid = e->getStringAttribute ("uid", sc.uid);
             sc.morphSeconds = juce::jlimit (0.0, 120.0, e->getDoubleAttribute ("morph", 8.0));
+            auto fxOf = [] (const juce::XmlElement* x, bool& has)
+            {
+                const auto* f = x->getChildByName ("Fx");
+                has = f != nullptr;
+                return FxSettings::fromXml (f);
+            };
             for (auto* ce : e->getChildWithTagNameIterator ("Channel"))
-                sc.channels.push_back ({ ce->getStringAttribute ("uid"), ce->getBoolAttribute ("playing"),
-                                         ce->getDoubleAttribute ("volume") });
+            {
+                Scene::Channel c { ce->getStringAttribute ("uid"), ce->getBoolAttribute ("playing"), ce->getDoubleAttribute ("volume") };
+                c.fx = fxOf (ce, c.hasFx);
+                sc.channels.push_back (c);
+            }
             for (auto* ge : e->getChildWithTagNameIterator ("Group"))
-                sc.groups.push_back ({ ge->getStringAttribute ("uid"), ge->getDoubleAttribute ("fader"),
-                                       ge->getBoolAttribute ("muted") });
+            {
+                Scene::Group g { ge->getStringAttribute ("uid"), ge->getDoubleAttribute ("fader"), ge->getBoolAttribute ("muted") };
+                g.fx = fxOf (ge, g.hasFx);
+                sc.groups.push_back (g);
+            }
             for (auto* se : e->getChildWithTagNameIterator ("Strip"))
-                sc.strips.push_back ({ se->getStringAttribute ("kind") == "instrument" ? Scene::Strip::instrument : Scene::Strip::input,
-                                       se->getIntAttribute ("index"), se->getDoubleAttribute ("fader"), se->getBoolAttribute ("muted") });
+            {
+                Scene::Strip st { se->getStringAttribute ("kind") == "instrument" ? Scene::Strip::instrument : Scene::Strip::input,
+                                  se->getIntAttribute ("index"), se->getDoubleAttribute ("fader"), se->getBoolAttribute ("muted") };
+                st.fx = fxOf (se, st.hasFx);
+                sc.strips.push_back (st);
+            }
             for (auto* ke : e->getChildWithTagNameIterator ("Key"))
                 sc.keys.push_back ({ ke->getIntAttribute ("instrument"), ke->getIntAttribute ("root", 9),
-                                     ke->getIntAttribute ("scale"), ke->getIntAttribute ("octave", 3) });
+                                     ke->getIntAttribute ("scale"), ke->getIntAttribute ("octave", 3),
+                                     ke->getBoolAttribute ("anyKey", false) });
             scenes.push_back (std::move (sc));
         }
 
@@ -365,6 +528,9 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
             s.volumeDb = se->getDoubleAttribute ("volume", 0.0);
             s.smoothSeconds = se->getDoubleAttribute ("smooth", 0.0);
             s.reverse = se->getBoolAttribute ("reverse");
+            s.shape = { juce::jmax (0.0, se->getDoubleAttribute ("trimStart")), juce::jmax (0.0, se->getDoubleAttribute ("trimEnd")),
+                        juce::jmax (0.0, se->getDoubleAttribute ("fadeIn")), juce::jmax (0.0, se->getDoubleAttribute ("fadeOut")),
+                        se->getDoubleAttribute ("sampleGain") };
             s.uid = se->getStringAttribute ("uid", s.uid);
             s.fx = FxSettings::fromXml (se->getChildByName ("Fx"));
             r.slots.push_back (std::move (s));
@@ -392,6 +558,8 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
 
         auto& in = inputs[(size_t) i++];
         in.name = ie->getStringAttribute ("name", in.name);
+        in.group = ie->getStringAttribute ("group");
+        in.order = ie->getIntAttribute ("order");
         if (ie->hasAttribute ("channel"))
         {
             in.channel = juce::jlimit (0, maxDeviceInputs - 1, ie->getIntAttribute ("channel"));
@@ -428,11 +596,14 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
         Instrument inst;
         inst.name = e->getStringAttribute ("name");
         inst.label = e->getStringAttribute ("label");
+        inst.group = e->getStringAttribute ("group");
+        inst.order = e->getIntAttribute ("order");
         inst.faderDb = e->getDoubleAttribute ("fader");
         inst.muted = e->getBoolAttribute ("mute");
         inst.recordWithFx = e->getBoolAttribute ("recordWithFx", true);
         inst.midiSource = e->getStringAttribute ("midiSource");
         inst.midiSourceId = e->getStringAttribute ("midiSourceId");
+        inst.anyKey = e->getBoolAttribute ("anyKey", false);   // older sets: their instruments were in a key
         inst.padRoot = juce::jlimit (0, 11, e->getIntAttribute ("padRoot", 9));
         inst.padScale = e->getIntAttribute ("padScale", 0);
         inst.padOctave = juce::jlimit (0, 7, e->getIntAttribute ("padOctave", 3));
@@ -443,6 +614,17 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
         instruments.push_back (std::move (inst));
     }
 
+    poolFolders = {};
+    if (auto* fe = xml.getChildByName ("PoolFolders"))
+    {
+        for (auto* m : fe->getChildWithTagNameIterator ("Moved"))
+            poolFolders.moved[decode (m->getStringAttribute ("path"), baseFolder).getFullPathName()] = m->getStringAttribute ("folder");
+        for (auto* m : fe->getChildWithTagNameIterator ("Made"))
+            poolFolders.made.addIfNotAlreadyThere (m->getStringAttribute ("name"));
+        for (auto* m : fe->getChildWithTagNameIterator ("Closed"))
+            poolFolders.closed.addIfNotAlreadyThere (m->getStringAttribute ("name"));
+    }
+
     juce::Array<juce::File> pooled;
     if (auto* pe = xml.getChildByName ("Pool"))
         for (auto* f : pe->getChildWithTagNameIterator ("File"))
@@ -451,4 +633,6 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     // Everything on a channel also belongs in the pool.
     pooled.addArray (allFiles());
     addToPool (pooled);
+
+    ensureLiveGroups();
 }

@@ -13,6 +13,8 @@ class SourceStrip : public juce::Component
 {
 public:
     std::function<void()> onMenu, onFirstButton, onArm, onFx;
+    juce::String dragId;   // what a drag of this strip carries ("strip:in:<i>" or "strip:inst:<i>")
+    static constexpr const char* dragPrefix = "strip:";
     ChannelStrip strip { {}, false };
 
     explicit SourceStrip (const juce::String& firstButtonText, const juce::String& firstButtonTip)
@@ -33,16 +35,17 @@ public:
     }
 
     // A row of one-click choices under the buttons (the instrument's keys); the active one lights up.
-    std::function<void (int)> onChoice;
+    std::function<void (int)> onChoice, onChoiceMenu;   // onChoiceMenu: a key button right-clicked
 
     void setChoices (const juce::StringArray& labels)
     {
         choiceButtons.clear();
         for (int i = 0; i < labels.size(); ++i)
         {
-            auto* b = choiceButtons.add (new juce::TextButton (labels[i]));
+            auto* b = choiceButtons.add (new RightClickable<juce::TextButton> (labels[i]));
             b->setWantsKeyboardFocus (false);
             b->onClick = [this, i] { if (onChoice) onChoice (i); };
+            b->onRightClick = [this, i] { if (onChoiceMenu) onChoiceMenu (i); };
             addAndMakeVisible (b);
         }
         resized();
@@ -122,6 +125,27 @@ public:
         strip.setBounds (area);
     }
 
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (strip.isMutedShown())
+        {
+            // Muted: everything but the MUTE key fades back.
+            g.setColour (Theme::raised.withAlpha (0.5f));
+            g.fillRoundedRectangle (getLocalBounds().toFloat().withBottom ((float) strip.getY() + (float) strip.muteButton.getY() - 2.0f), 6.0f);
+        }
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        // Dragging the strip (by its name or background) picks it up to move it.
+        if (e.mods.isPopupMenu() || e.getDistanceFromDragStart() < 6 || dragId.isEmpty())
+            return;
+
+        if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
+            if (! container->isDragAndDropActive())
+                container->startDragging (dragId, this);
+    }
+
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (e.mouseWasClicked() && (e.mods.isPopupMenu() || nameArea.getUnion (detailArea).contains (e.getPosition())) && onMenu)
@@ -133,97 +157,44 @@ private:
     juce::Colour accent = Theme::accent;
     juce::Rectangle<int> nameArea, detailArea;
     juce::TextButton firstButton, armButton { "ARM" }, fxButton { "FX" };
-    juce::OwnedArray<juce::TextButton> choiceButtons;
+    juce::OwnedArray<RightClickable<juce::TextButton>> choiceButtons;
 };
 
-// The INPUTS group: the interface inputs and hosted instruments in a grid
-// (the looper's controls are in the bottom bar). It flows among the other groups, can be dragged
-// by its title, and its right edge sets how many strips sit on a line.
-class InputsView : public juce::Component
+// Owns every input and instrument strip, made and refreshed from the set. The strips
+// are shown by the live groups (LiveGroupView) they belong to, which take them as children.
+class InputsView
 {
 public:
-    // A slim title bar across the top (name, + INSTRUMENT); the strips fill the rest.
-    static constexpr int headerWidth = 10, titleHeight = 30, stripWidth = 160, stripHeight = 272, stripGap = 6, margin = 6;
-    static constexpr const char* dragId = "group:inputs";
-    static inline const juce::Colour colour { 0xffe07a9a };            // rose: live inputs and recorded loops
-    static inline const juce::Colour instrumentColour { 0xff5fc9c0 };  // teal: hosted instruments
+    static constexpr int stripWidth = 160, stripHeight = 272;
 
     juce::OwnedArray<SourceStrip> inputStrips;
     juce::OwnedArray<SourceStrip> instrumentStrips;
-    juce::TextButton addInputButton { "+ INPUT" }, addInstrumentButton { "+ INSTRUMENT" };
 
     // Called whenever input or instrument strips are created, so the owner can wire them up.
     std::function<void (int index, SourceStrip&)> onInputStripCreated, onInstrumentStripCreated;
-    std::function<void()> onLayoutChanged;
-    ColumnResizer resizer;   // its onColumnsChanged is set by the owner
-    juce::Point<int> grabOffset;   // where in the group the mouse picked it up
+    std::function<void()> onStripsChanged;   // strips were made or removed: the groups need laying out again
 
-    // The size this group wants for this many strips, given the widest it may be.
-    // columns 0 means automatic: all the strips on one line if they fit.
-    static juce::Point<int> preferredSize (int numStrips, int maxWidth, int wantedColumns = 0)
-    {
-        const int items = juce::jmax (1, numStrips);
-        const int cell = stripWidth + stripGap;
-        const int fitting = juce::jmax (1, (maxWidth - headerWidth - 2 * margin + stripGap) / cell);
-        const int columns = juce::jlimit (1, items, juce::jmin (fitting, wantedColumns > 0 ? wantedColumns : items));
-        const int lines = (items + columns - 1) / columns;
-        return { headerWidth + 2 * margin + columns * cell - stripGap,
-                 titleHeight + lines * (stripHeight + stripGap) - stripGap + 2 * margin };
-    }
+    int getNumStrips() const   { return inputStrips.size() + instrumentStrips.size(); }
 
-    int getNumStrips() const   { return (int) inputStrips.size() + instrumentStrips.size(); }
-
-    void setFixedColumns (bool isFixed)
-    {
-        if (isFixed != fixedColumns) { fixedColumns = isFixed; repaint(); }
-    }
-
-    // Shows which side a dragged group would land on: -1 before, 1 after, 0 hidden.
-    void setGroupDropSide (int side)
-    {
-        if (side != groupDropSide) { groupDropSide = side; repaint(); }
-    }
-
-    InputsView()
-    {
-        addAndMakeVisible (content);
-        content.setInterceptsMouseClicks (false, true);
-
-        resizer.columnsForWidth = [this] (int width)
-        {
-            const int cell = stripWidth + stripGap;
-            const int fitting = (width - headerWidth - 2 * margin + stripGap + cell / 2) / cell;
-            return juce::jlimit (1, juce::jmax (1, getNumStrips()), fitting);
-        };
-
-        addAndMakeVisible (addInputButton);
-        addInputButton.setTooltip ("Add another input from the audio interface (up to 8)");
-        addInputButton.setWantsKeyboardFocus (false);
-
-        addAndMakeVisible (addInstrumentButton);
-        addInstrumentButton.setTooltip ("Host a VST3 instrument, played from the Fire's pads or any keyboard");
-        addInstrumentButton.setWantsKeyboardFocus (false);
-
-    }
-
+    // colourOf (isInstrument, index): the colour of the group the strip is in.
     void update (const LiveSet& set, const std::function<juce::String (int)>& instrumentName,
-                 const std::function<juce::String (int)>& instrumentDetail)
+                 const std::function<juce::String (int)>& instrumentDetail,
+                 const std::function<juce::Colour (bool, int)>& colourOf)
     {
+        bool changed = false;
+
         if (inputStrips.size() != (int) set.inputs.size())
         {
             inputStrips.clear();
             for (int i = 0; i < (int) set.inputs.size(); ++i)
             {
                 auto* s = inputStrips.add (new SourceStrip ("MON", "Monitor: hear this input through the speakers. Off by default so a mic can't feed back."));
-                content.addAndMakeVisible (s);
                 s->strip.fader.setValue (set.inputs[(size_t) i].faderDb, juce::dontSendNotification);
                 s->strip.muteButton.setToggleState (set.inputs[(size_t) i].muted, juce::dontSendNotification);
                 if (onInputStripCreated)
                     onInputStripCreated (i, *s);
             }
-            if (onLayoutChanged)
-                onLayoutChanged();
-            resized();
+            changed = true;
         }
 
         for (int i = 0; i < inputStrips.size(); ++i)
@@ -232,7 +203,7 @@ public:
             const auto source = "In " + juce::String (in.channel + 1) + (in.stereo ? "+" + juce::String (in.channel + 2) + " stereo" : juce::String());
             const auto plugin = in.insertName.isNotEmpty() ? "  -  " + in.insertName : juce::String();
             inputStrips[i]->setContent (in.name, source + plugin + (in.recordWithFx ? juce::String() : "  -  records dry"),
-                                        in.monitor, in.armed, in.fx.anyOn(), colour);
+                                        in.monitor, in.armed, in.fx.anyOn(), colourOf (false, i));
         }
 
         if (instrumentStrips.size() != (int) set.instruments.size())
@@ -241,106 +212,20 @@ public:
             for (int i = 0; i < (int) set.instruments.size(); ++i)
             {
                 auto* s = instrumentStrips.add (new SourceStrip ("EDIT", "Open the instrument's own window"));
-                content.addAndMakeVisible (s);
                 if (onInstrumentStripCreated)
                     onInstrumentStripCreated (i, *s);
             }
-            if (onLayoutChanged)
-                onLayoutChanged();   // more or fewer strips means a different size
-            resized();
+            changed = true;
         }
 
         for (int i = 0; i < instrumentStrips.size(); ++i)
         {
             const auto& inst = set.instruments[(size_t) i];
             instrumentStrips[i]->setContent (instrumentName (i), instrumentDetail (i), false, inst.armed, inst.fx.anyOn(),
-                                             instrumentColour);
+                                             colourOf (true, i));
         }
 
-        addInputButton.setEnabled ((int) set.inputs.size() < LiveSet::maxInputs);
-        addInstrumentButton.setEnabled ((int) set.instruments.size() < LiveSet::maxInstruments);
+        if (changed && onStripsChanged)
+            onStripsChanged();
     }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto bounds = getLocalBounds().toFloat();
-        Theme::drawSurface (g, bounds, Theme::panel, 8.0f);
-        Theme::drawSpine (g, bounds, colour);
-
-        g.setColour (colour);
-        g.setFont (Theme::heading (14.0f, 0.1f));
-        g.drawText ("INPUTS", titleArea, juce::Justification::centredLeft);
-    }
-
-    void paintOverChildren (juce::Graphics& g) override
-    {
-        ColumnResizer::paintGrip (g, *this, colour, fixedColumns);
-
-        if (groupDropSide != 0)
-        {
-            g.setColour (colour);
-            const float x = groupDropSide < 0 ? 0.0f : (float) getWidth() - 5.0f;
-            g.fillRoundedRectangle (x, 0.0f, 5.0f, (float) getHeight(), 2.0f);
-        }
-    }
-
-    void mouseMove (const juce::MouseEvent& e) override       { resizer.mouseMove (*this, e); }
-    void mouseDoubleClick (const juce::MouseEvent& e) override { resizer.mouseDoubleClick (*this, e); }
-    void mouseDown (const juce::MouseEvent& e) override       { resizer.mouseDown (*this, e); }
-    void mouseUp (const juce::MouseEvent&) override           { resizer.mouseUp(); }
-
-    void mouseDrag (const juce::MouseEvent& e) override
-    {
-        if (resizer.mouseDrag (e))
-            return;
-
-        // Dragging the title picks the whole group up.
-        if (! titleArea.contains (e.getMouseDownPosition()) || e.getDistanceFromDragStart() < 6)
-            return;
-
-        if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
-            if (! container->isDragAndDropActive())
-            {
-                grabOffset = e.getMouseDownPosition();
-                container->startDragging (dragId, this);
-            }
-    }
-
-    void resized() override
-    {
-        auto area = getLocalBounds().reduced (0, margin).withTrimmedRight (margin);
-        area.removeFromLeft (headerWidth);
-
-        auto titleBar = area.removeFromTop (titleHeight - 4);
-        const bool roomy = titleBar.getWidth() >= 320;
-        addInstrumentButton.setButtonText (roomy ? "+ INSTRUMENT" : "+ INST");
-        addInstrumentButton.setBounds (titleBar.removeFromRight (roomy ? 124 : 56));
-        titleBar.removeFromRight (4);
-        addInputButton.setButtonText (roomy ? "+ INPUT" : "+ IN");
-        addInputButton.setBounds (titleBar.removeFromRight (roomy ? 84 : 44));
-        titleArea = titleBar.withTrimmedLeft (4);
-        area.removeFromTop (4);
-
-        // Strips in a grid: the interface inputs first, then the instruments.
-        content.setBounds (area);
-        const int columns = juce::jmax (1, (area.getWidth() + stripGap) / (stripWidth + stripGap));
-        int index = 0;
-        auto place = [&] (juce::Component& s)
-        {
-            s.setBounds ((index % columns) * (stripWidth + stripGap), (index / columns) * (stripHeight + stripGap),
-                         stripWidth, stripHeight);
-            ++index;
-        };
-
-        for (auto& s : inputStrips)
-            place (*s);
-        for (auto* s : instrumentStrips)
-            place (*s);
-    }
-
-private:
-    juce::Rectangle<int> titleArea;
-    juce::Component content;
-    bool fixedColumns = false;
-    int groupDropSide = 0;
 };

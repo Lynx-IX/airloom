@@ -42,14 +42,16 @@ public:
 
     void triggerShot (int owner, LoopClipPtr clip, float gain);
 
-    // Changes the volume of everything the owner is playing.
+    // Changes the volume of everything the owner is playing. A channel with its own effects
+    // gets it after them (like a mixer fader), so it turns the reverb and delay tails down too.
     void setOwnerGain (int owner, float gain);
 
     // Gives a channel its own effects (or removes them when nothing is on).
     // Returns false if every per-channel effects slot in the row is taken.
     bool setOwnerFx (int owner, const FxSettings& settings);
 
-    // Highest level the owner's voices reached since the last call (before effects and the row fader).
+    // Highest level the owner reached since the last call: after its own effects and volume,
+    // before the row's.
     float takeOwnerPeak (int owner);
 
     void stopAll (double seconds);
@@ -65,6 +67,10 @@ public:
 
 private:
     int fxSlotFor (int owner) const;
+    float voiceGainFor (int owner) const;   // 1 for a channel with its own effects: its volume comes after them
+    void refreshOwnerVoices (int owner);
+
+    std::map<int, float> ownerVolume;       // message thread only: each channel's volume (linear)
 
     std::array<LoopPlayer, numLoopVoices> loops;
     std::array<LoopPlayer, numShotVoices> shots;
@@ -77,6 +83,9 @@ private:
     std::array<FxChain, numChannelFx> channelFx;
     std::array<juce::AudioBuffer<float>, numChannelFx> channelFxBuffers;   // audio thread only
     std::array<std::atomic<float>, numChannelFx> channelFxPeaks {};         // after each channel's own effects
+    std::array<std::atomic<float>, numChannelFx> channelFxVolume {};        // its channel's volume, applied after them
+    std::array<std::atomic<bool>, numChannelFx> channelFxVolumeSnap {};     // jump to it (a new owner) rather than glide
+    std::array<juce::SmoothedValue<float>, numChannelFx> channelFxVolumeRamp;   // audio thread only
 
     FxChain fx;
     PluginInsert insert;

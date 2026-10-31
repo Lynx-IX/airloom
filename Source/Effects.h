@@ -166,6 +166,15 @@ struct FxParameter
 
 const FxParameter* findFxParameter (const juce::String& name);
 
+// Part-way from one set of effects to another (t 0..1), for scene morphs. Knobs glide; an effect
+// switched on or off along the way is on throughout, its mix fading in from nothing or out to
+// nothing, so it arrives and leaves smoothly; other choices (sync, divisions) change half-way.
+// At t = 1 it is exactly 'to'.
+FxSettings blendFx (const FxSettings& from, const FxSettings& to, float t);
+
+// True if the two would sound the same (every setting equal).
+bool sameFx (const FxSettings& a, const FxSettings& b);
+
 // The pitch shifter in the octave effect and the shimmer: two read heads sweep through
 // a short delay line at the new speed, crossfading so neither's jump back is heard.
 class PitchShifter
@@ -321,7 +330,18 @@ public:
 
     void process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
 
+    // Empties every tail and filter on the next block (a chain handed to another channel
+    // shouldn't play the last one's reverb).
+    void requestClear()   { clearRequested = true; }
+
+    // Safety net: a block that comes out non-finite or far beyond full scale means something
+    // ran away; the chain is emptied, the block silenced and this count goes up.
+    static inline std::atomic<int> runaways { 0 };
+
 private:
+    void clearState();
+    std::atomic<bool> clearRequested { false };
+
     struct Biquad
     {
         float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f, z1 = 0.0f, z2 = 0.0f;

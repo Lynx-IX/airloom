@@ -89,6 +89,50 @@ namespace
     }
 }
 
+FxSettings blendFx (const FxSettings& from, const FxSettings& to, float t)
+{
+    if (t >= 1.0f)
+        return to;
+    t = juce::jmax (0.0f, t);
+
+    FxSettings r = t < 0.5f ? from : to;   // the choices that can't glide
+
+    for (const auto& f : boolFields)
+        if (juce::String (f.name).endsWith ("On"))
+            r.*f.member = from.*f.member || to.*f.member;
+
+    for (const auto& f : doubleFields)
+        r.*f.member = from.*f.member + (to.*f.member - from.*f.member) * t;
+
+    // A section coming or going: its mix from or to nothing, its other knobs where they'll be or were.
+    for (const auto& p : parameters)
+    {
+        if (p.section == nullptr)
+            continue;
+        const bool wasOn = from.*p.section, willBeOn = to.*p.section;
+        if (wasOn == willBeOn)
+            continue;
+        if (juce::String (p.name).endsWith ("Mix"))
+        {
+            const double a = wasOn ? from.*p.member : 0.0, b = willBeOn ? to.*p.member : 0.0;
+            r.*p.member = a + (b - a) * t;
+        }
+        else
+        {
+            r.*p.member = willBeOn ? to.*p.member : from.*p.member;
+        }
+    }
+    return r;
+}
+
+bool sameFx (const FxSettings& a, const FxSettings& b)
+{
+    juce::XmlElement ea ("A"), eb ("A");
+    a.addToXml (ea);
+    b.addToXml (eb);
+    return ea.isEquivalentTo (&eb, false);
+}
+
 const FxParameter* findFxParameter (const juce::String& name)
 {
     for (auto& p : parameters)
@@ -779,9 +823,30 @@ void FxChain::processMotion (float* left, float* right, int numSamples)
     }
 }
 
+void FxChain::clearState()
+{
+    gate.reset();
+    compressor.reset();
+    for (auto* filters : { &lowCut, &eqLow, &eqMid, &eqHigh })
+        for (auto& f : *filters)
+            f.z1 = f.z2 = 0.0f;
+    delayBuffer.clear();
+    delayToneState.fill (0.0f);
+    reverb.reset();
+    swellEnvelope = 0.0f;
+    std::fill (tapeLine.begin(), tapeLine.end(), 0.0f);
+    tapeToneState.fill (0.0f);
+    filter.reset();
+    octaveShifter.reset();
+    chorus.reset();
+}
+
 void FxChain::process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    if (clearRequested.exchange (false))
+        clearState();
 
     if (settingsChanged)
     {
@@ -930,4 +995,19 @@ void FxChain::process (juce::AudioBuffer<float>& buffer, int startSample, int nu
             left[i] *= std::cos (angle) * juce::MathConstants<float>::sqrt2;
             right[i] *= std::sin (angle) * juce::MathConstants<float>::sqrt2;
         }
+
+    // Runaway guard: anything non-finite or past +24 dBFS can't be music. Empty the chain
+    // (otherwise it would ring in the tails for minutes) and drop the block.
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float a = std::abs (left[i]) + std::abs (right[i]);
+        if (! (a < 32.0f))   // also catches NaN
+        {
+            clearState();
+            juce::FloatVectorOperations::clear (left, numSamples);
+            juce::FloatVectorOperations::clear (right, numSamples);
+            ++runaways;
+            break;
+        }
+    }
 }

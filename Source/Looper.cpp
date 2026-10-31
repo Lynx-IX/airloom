@@ -3,11 +3,22 @@
 void Looper::prepare (double newSampleRate, double maxSeconds)
 {
     sampleRate = newSampleRate;
+    maxTakeSeconds = maxSeconds;
     seamSamples = (int) (0.03 * sampleRate);
     take.setSize (2, (int) (sampleRate * maxSeconds) + seamSamples);
     state = (int) State::idle;
     length = loopLength = 0;
     dubTarget = nullptr;
+}
+
+void Looper::setTracks (int tracks)
+{
+    tracks = juce::jmax (1, tracks);
+    if (tracks == getTracks() || getState() != State::idle || startRequested)
+        return;
+
+    const double seconds = juce::jmax (60.0, maxTakeSeconds / tracks);
+    take.setSize (2 * tracks, (int) (sampleRate * seconds) + seamSamples);
 }
 
 bool Looper::startRecording (juce::int64 at)
@@ -56,9 +67,9 @@ bool Looper::collectTake (juce::AudioBuffer<float>& destination, juce::int64& st
     const int len = loopLength;
     const int recorded = length;
     const int seam = juce::jmin (seamSamples, recorded - len, len / 3);
-    destination.setSize (2, len);
+    destination.setSize (take.getNumChannels(), len);
 
-    for (int ch = 0; ch < 2; ++ch)
+    for (int ch = 0; ch < take.getNumChannels(); ++ch)
     {
         const float* src = take.getReadPointer (ch);
         float* dst = destination.getWritePointer (ch);
@@ -143,7 +154,7 @@ void Looper::process (const juce::AudioBuffer<float>& bus, int numSamples, juce:
         const int limit = current == State::finishing ? targetLength : take.getNumSamples() - seamSamples;
         const int n = juce::jmax (0, juce::jmin (numSamples - skip, limit - start));
 
-        for (int ch = 0; ch < 2; ++ch)
+        for (int ch = 0; ch < take.getNumChannels(); ++ch)
             take.copyFrom (ch, start, bus, ch % bus.getNumChannels(), skip, n);
 
         length = start + n;

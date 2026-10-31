@@ -1,25 +1,27 @@
 #include "MainComponent.h"
 #include "TempoGuess.h"
 #include "Theme.h"
+#include "GroupLayout.h"
+#include "CrashLog.h"   // last: it brings in windows.h
 
 namespace
 {
     constexpr size_t cacheBudgetBytes = (size_t) 2 * 1024 * 1024 * 1024;   // 2 GB of loaded audio
-    constexpr int rowGap = 8;
+    constexpr int rowGap = GroupLayout::gap;
     const double smoothOptions[] = { 0.0, 0.5, 1.0, 2.0, 4.0, 8.0 };       // seconds; 0 = off
 
-    // Each version of a sample (smoothed, reversed) is kept in memory under its own key.
-    juce::String clipKey (const juce::File& file, double smoothSeconds, bool reversed)
+    // Each version of a sample (smoothed, reversed, trimmed and shaped) is kept in memory under its own key.
+    juce::String clipKey (const juce::File& file, double smoothSeconds, bool reversed, const SampleShape& shape = {})
     {
         return file.getFullPathName() + (smoothSeconds > 0.0 ? "|smooth" + juce::String (smoothSeconds) : juce::String())
-                                      + (reversed ? "|rev" : "");
+                                      + (reversed ? "|rev" : "") + shape.key();
     }
 
     double smoothingFor (const LiveSet::Slot& s)   { return s.oneShot ? 0.0 : s.smoothSeconds; }
 
     juce::String clipKey (const LiveSet::Slot& s)
     {
-        return clipKey (s.file, smoothingFor (s), s.reverse);
+        return clipKey (s.file, smoothingFor (s), s.reverse, s.shape);
     }
 
     bool writeWav (const LoopClip& clip, const juce::File& file)
@@ -40,14 +42,6 @@ namespace
         auto writer = wav.createWriterFor (stream, options);
         return writer != nullptr && writer->writeFromAudioSampleBuffer (clip.data, 0, clip.data.getNumSamples());
     }
-
-    // One-click keys for the Fire pads, matching the flutes. Pentatonic, as the flutes are tuned.
-    struct KeyPreset { const char* label; int root; int scale; };
-    const KeyPreset fluteKeys[] = {
-        { "A min", 9, 0 },    // A minor pentatonic
-        { "Bb maj", 10, 1 },  // B flat major pentatonic
-        { "E maj", 4, 1 },    // E major pentatonic
-    };
 
     juce::String formatTime (double seconds)
     {
@@ -139,6 +133,8 @@ MainComponent::MainComponent()
         e = std::make_unique<InputChannel>();
     for (auto& e : instrumentEngines)
         e = std::make_unique<InstrumentChannel>();
+    for (auto& b : liveBuses)
+        b = std::make_unique<LiveGroupBus>();
 
     juce::addDefaultFormatsToManager (pluginFormats);
     if (auto xml = props->getXmlValue ("knownPlugins"))
@@ -149,6 +145,16 @@ MainComponent::MainComponent()
     pool.onFilesAdded = [this] (const juce::Array<juce::File>& files) { addToPool (files); };
     pool.onRightClick = [this] (const juce::Array<juce::File>& files) { showPoolMenu (files); };
     pool.describeUsage = [this] (const juce::File& f) { return liveSet.describeUsage (f); };
+    pool.isPlaying = [this] (const juce::File& f)
+    {
+        for (const auto& r : liveSet.rows)
+            for (const auto& s : r.slots)
+                if (s.playing && s.file == f)
+                    return true;
+        return false;
+    };
+    pool.onFoldersChanged = [this] { saveSession(); };
+    pool.setFolders (&liveSet.poolFolders);
     pool.setCollapsed (props->getBoolValue ("poolCollapsed"));
     pool.onToggleCollapse = [this]
     {
@@ -161,21 +167,25 @@ MainComponent::MainComponent()
     rowsViewport.setViewedComponent (&rowsContent, false);
     rowsViewport.setScrollBarsShown (true, false);
     rowsViewport.setScrollBarThickness (10);
-    rowsContent.addAndMakeVisible (inputsView);
-    inputsView.onInputStripCreated = [this] (int i, SourceStrip& s) { setupInputStrip (i, s); };
-    inputsView.onInstrumentStripCreated = [this] (int i, SourceStrip& s) { setupInstrumentStrip (i, s); };
-    inputsView.onLayoutChanged = [this] { layoutRows(); };
-    inputsView.resizer.onColumnsChanged = [this] (int columns)
+    inputsView.onInputStripCreated = [this] (int i, SourceStrip& s)
     {
-        liveSet.inputsColumns = columns;
-        layoutRows();
-        saveSession();
+        setupInputStrip (i, s);
+        s.dragId = SourceStrip::dragPrefix + juce::String ("in:") + juce::String (i);
+        disableKeyboardFocus (s);
     };
-    inputsView.addInputButton.onClick = [this] { addInput(); };
-    inputsView.addInstrumentButton.onClick = [this] { addInstrument(); };
+    inputsView.onInstrumentStripCreated = [this] (int i, SourceStrip& s)
+    {
+        setupInstrumentStrip (i, s);
+        s.dragId = SourceStrip::dragPrefix + juce::String ("inst:") + juce::String (i);
+        disableKeyboardFocus (s);
+    };
+    inputsView.onStripsChanged = [this] { updateLiveGroupViews(); layoutRows(); };
+    liveSet.ensureLiveGroups();
+    rebuildLiveGroups();
     setupInputs();
     addAndMakeVisible (addRowButton);
-    addRowButton.onClick = [this] { addRow(); };
+    addRowButton.setTooltip ("Add a group: loops, interface inputs or instruments");
+    addRowButton.onClick = [this] { showAddGroupMenu(); };
 
     addAndMakeVisible (masterStrip);
     masterStrip.muteButton.setVisible (false);
@@ -399,6 +409,7 @@ MainComponent::~MainComponent()
     // Keep the instruments' latest settings, then close their windows before the plugins go.
     captureInstrumentStates();
     saveSession();
+    writeSetFile();   // the last changes, too
     for (int i = 0; i < LiveSet::maxInstruments; ++i)
         closeEditor (i);
     for (auto& w : inputPluginWindows)
@@ -539,10 +550,13 @@ void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRat
         e->prepare (sampleRate, samplesPerBlockExpected);
     for (auto& e : instrumentEngines)
         e->prepare (sampleRate, samplesPerBlockExpected);
+    for (auto& b : liveBuses)
+        b->prepare (sampleRate, samplesPerBlockExpected);
     currentBlockSize = samplesPerBlockExpected;
 
     inputCapture.setSize (LiveSet::maxDeviceInputs, juce::jmax (4096, samplesPerBlockExpected));
-    recordBus.setSize (2, juce::jmax (4096, samplesPerBlockExpected));
+    recordBus.setSize (2 * maxRecordTracks, juce::jmax (4096, samplesPerBlockExpected));
+    recordDiscard.setSize (2, juce::jmax (4096, samplesPerBlockExpected));
     looper.prepare (sampleRate);
     currentSampleRate = sampleRate;
 
@@ -575,12 +589,36 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
         inputCapture.copyFrom (ch, 0, buffer, ch, info.startSample, inputSamples);
 
     info.clearActiveBufferRegion();
-    recordBus.clear (0, juce::jmin (inputSamples, recordBus.getNumSamples()));
+    recordBus.clear (0, juce::jmin (juce::jmax (inputSamples, info.numSamples), recordBus.getNumSamples()));
 
+    // Each armed source records onto its own track: a two-channel view of recordBus (no allocation).
+    auto trackFor = [this] (int track)
+    {
+        if (track < 0 || track >= maxRecordTracks)
+            return juce::AudioBuffer<float> (recordDiscard.getArrayOfWritePointers(), 2, recordDiscard.getNumSamples());
+        return juce::AudioBuffer<float> (recordBus.getArrayOfWritePointers() + 2 * track, 2, recordBus.getNumSamples());
+    };
+
+    // Each input and instrument plays into its live group, whose effects, fader and mute
+    // then go over the lot on the way to the master.
+    const int liveSamples = juce::jmin (info.numSamples, LiveGroupBus::capacity);
+    auto busFor = [this] (int index) -> LiveGroupBus& { return *liveBuses[(size_t) juce::jlimit (0, LiveSet::maxLiveGroups - 1, index)]; };
+    for (auto& b : liveBuses)
+        b->begin (liveSamples);
     for (int i = 0; i < juce::jmin (activeInputs.load(), LiveSet::maxInputs); ++i)
-        inputEngines[(size_t) i]->process (inputCapture, numIn, buffer, info.startSample, inputSamples, recordBus);
-    for (auto& inst : instrumentEngines)
-        inst->process (buffer, info.startSample, info.numSamples, recordBus);
+    {
+        auto& bus = busFor (inputBus[(size_t) i].load());
+        auto track = trackFor (inputTrack[(size_t) i].load());
+        inputEngines[(size_t) i]->process (inputCapture, numIn, bus.main, 0, juce::jmin (inputSamples, liveSamples), track, &bus.send);
+    }
+    for (int i = 0; i < LiveSet::maxInstruments; ++i)
+    {
+        auto& bus = busFor (instrumentBus[(size_t) i].load());
+        auto track = trackFor (instrumentTrack[(size_t) i].load());
+        instrumentEngines[(size_t) i]->process (bus.main, 0, liveSamples, track, &bus.send, bus.isSilenced());
+    }
+    for (auto& b : liveBuses)
+        b->finish (buffer, info.startSample, liveSamples);
 
     looper.process (recordBus, juce::jmin (inputSamples, recordBus.getNumSamples()), audioClock, roundTripLatency);
 
@@ -677,11 +715,23 @@ void MainComponent::showSetMenu()
     m.addItem (1, "New set");
     m.addItem (2, "Open set...");
     m.addSeparator();
-    m.addItem (3, "Save set", saved);
+    m.addItem (3, saved ? juce::String ("Save set (it saves itself as you go)") : juce::String ("Save set"), saved);
     m.addItem (4, "Save set as new folder...");
+    m.addItem (10, "Rename set...", saved);
+
+    juce::PopupMenu recent;
+    const auto recents = recentSets();
+    for (int i = 0; i < recents.size(); ++i)
+    {
+        const juce::File f (recents[i]);
+        recent.addItem (400 + i, f.getFileNameWithoutExtension() + "   (" + f.getParentDirectory().getFileName() + ")",
+                        f.existsAsFile() && f != liveSet.file);
+    }
+    m.addSubMenu ("Open recent", recent, ! recents.isEmpty());
     m.addItem (9, "Export set as one file (to move to another computer)...", packProgress == nullptr);
     m.addSeparator();
     m.addItem (5, "Show set folder", saved);
+    m.addItem (11, "Show backups", saved && liveSet.getFolder().getChildFile ("Backups").isDirectory());
     m.addSeparator();
     m.addItem (6, "Zoom in   (Ctrl +)");
     m.addItem (7, "Zoom out   (Ctrl -)");
@@ -698,6 +748,9 @@ void MainComponent::showSetMenu()
 
         if (r == 1) newSet();
         if (r == 2) openSet();
+        if (r == 10) renameSet();
+        if (r == 11) liveSet.getFolder().getChildFile ("Backups").revealToUser();
+        if (r >= 400 && r < 400 + recentSets().size()) openSetFile (juce::File (recentSets()[r - 400]));
         if (r == 3) saveSet (false);
         if (r == 4) saveSet (true);
         if (r == 5) liveSet.file.revealToUser();
@@ -725,18 +778,21 @@ LiveSet::Scene MainComponent::captureScene (const juce::String& name) const
     sc.morphSeconds = fadeTimeSlider.getValue();
     for (const auto& r : liveSet.rows)
     {
-        sc.groups.push_back ({ r.uid, r.faderDb, r.muted });
+        sc.groups.push_back ({ r.uid, r.faderDb, r.muted, true, r.fx });
         for (const auto& s : r.slots)
-            if (s.file != juce::File() && ! s.oneShot)
-                sc.channels.push_back ({ s.uid, s.playing, s.volumeDb });
+            if (s.file != juce::File())
+                sc.channels.push_back ({ s.uid, s.playing && ! s.oneShot, s.volumeDb, true, s.fx });
     }
+    for (const auto& lg : liveSet.liveGroups)
+        sc.groups.push_back ({ lg.uid, lg.faderDb, lg.muted, true, lg.fx });
     for (int i = 0; i < (int) liveSet.inputs.size(); ++i)
-        sc.strips.push_back ({ LiveSet::Scene::Strip::input, i, liveSet.inputs[(size_t) i].faderDb, liveSet.inputs[(size_t) i].muted });
+        sc.strips.push_back ({ LiveSet::Scene::Strip::input, i, liveSet.inputs[(size_t) i].faderDb, liveSet.inputs[(size_t) i].muted,
+                               true, liveSet.inputs[(size_t) i].fx });
     for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
     {
         const auto& inst = liveSet.instruments[(size_t) i];
-        sc.strips.push_back ({ LiveSet::Scene::Strip::instrument, i, inst.faderDb, inst.muted });
-        sc.keys.push_back ({ i, inst.padRoot, inst.padScale, inst.padOctave });
+        sc.strips.push_back ({ LiveSet::Scene::Strip::instrument, i, inst.faderDb, inst.muted, true, inst.fx });
+        sc.keys.push_back ({ i, inst.padRoot, inst.padScale, inst.padOctave, inst.anyKey });
     }
     return sc;
 }
@@ -778,6 +834,35 @@ void MainComponent::recallScene (int index)
     const double seconds = sc.morphSeconds;
     activeScene = index;
     sceneGlides.clear();
+    sceneFxGlides.clear();
+
+    // Effects the scene keeps that differ from now morph there too.
+    auto glideFx = [this] (SceneFxGlide::Kind kind, const juce::String& uid, int i, const FxSettings& now, bool has, const FxSettings& to)
+    {
+        if (has && ! sameFx (now, to))
+            sceneFxGlides.push_back ({ kind, uid, i, now, to });
+    };
+    for (const auto& r : liveSet.rows)
+    {
+        for (const auto& g : sc.groups)
+            if (g.uid == r.uid)
+                glideFx (SceneFxGlide::Kind::group, r.uid, -1, r.fx, g.hasFx, g.fx);
+        for (const auto& s : r.slots)
+            for (const auto& c : sc.channels)
+                if (c.uid == s.uid)
+                    glideFx (SceneFxGlide::Kind::channel, s.uid, -1, s.fx, c.hasFx, c.fx);
+    }
+    for (const auto& lg : liveSet.liveGroups)
+        for (const auto& g : sc.groups)
+            if (g.uid == lg.uid)
+                glideFx (SceneFxGlide::Kind::liveGroup, lg.uid, -1, lg.fx, g.hasFx, g.fx);
+    for (const auto& st : sc.strips)
+    {
+        if (st.kind == LiveSet::Scene::Strip::input && st.index < (int) liveSet.inputs.size())
+            glideFx (SceneFxGlide::Kind::input, {}, st.index, liveSet.inputs[(size_t) st.index].fx, st.hasFx, st.fx);
+        else if (st.kind == LiveSet::Scene::Strip::instrument && st.index < (int) liveSet.instruments.size())
+            glideFx (SceneFxGlide::Kind::instrument, {}, st.index, liveSet.instruments[(size_t) st.index].fx, st.hasFx, st.fx);
+    }
 
     // A strip (group, input or instrument) whose fader or mute differs glides there. A mute
     // fades out and an unmute fades in over the morph, so e.g. one instrument voice crossfades
@@ -828,6 +913,15 @@ void MainComponent::recallScene (int index)
         }
     }
 
+    for (int g = 0; g < (int) liveSet.liveGroups.size() && g < liveGroupViews.size(); ++g)
+    {
+        auto& lg = liveSet.liveGroups[(size_t) g];
+        for (const auto& sg : sc.groups)
+            if (sg.uid == lg.uid)
+                glideStrip (SceneGlide::Kind::liveGroup, lg.uid, g, lg.faderDb, lg.muted, sg.faderDb, sg.muted,
+                            liveGroupViews[g]->strip.muteButton);
+    }
+
     for (const auto& st : sc.strips)
     {
         if (st.kind == LiveSet::Scene::Strip::input && st.index < (int) liveSet.inputs.size() && st.index < inputsView.inputStrips.size())
@@ -851,8 +945,9 @@ void MainComponent::recallScene (int index)
         if (! juce::isPositiveAndBelow (k.instrument, (int) liveSet.instruments.size()))
             continue;
         auto& inst = liveSet.instruments[(size_t) k.instrument];
-        if (inst.padRoot != k.root || inst.padScale != k.scale || inst.padOctave != k.octave)
+        if (inst.padRoot != k.root || inst.padScale != k.scale || inst.padOctave != k.octave || inst.anyKey != k.anyKey)
         {
+            inst.anyKey = k.anyKey;
             inst.padRoot = k.root;
             inst.padScale = juce::jlimit (0, PadLayout::numScales - 1, k.scale);
             inst.padOctave = k.octave;
@@ -880,7 +975,7 @@ void MainComponent::stepScene (int delta)
 
 void MainComponent::updateMorph()
 {
-    if (sceneGlides.empty())
+    if (sceneGlides.empty() && sceneFxGlides.empty())
         return;
 
     // Smooth in and out, so levels don't lurch at the start or stop dead at the end.
@@ -924,6 +1019,26 @@ void MainComponent::updateMorph()
                 }
                 break;
 
+            case SceneGlide::Kind::liveGroup:
+                if (g.index < (int) liveSet.liveGroups.size() && liveSet.liveGroups[(size_t) g.index].uid == g.uid)
+                {
+                    auto& lg = liveSet.liveGroups[(size_t) g.index];
+                    auto& bus = *liveBuses[(size_t) g.index];
+                    lg.faderDb = db;
+                    liveGroupViews[g.index]->strip.fader.setValue (db, juce::dontSendNotification);
+                    if (done)
+                    {
+                        bus.setGain (dbToGain (g.toDb));
+                        setLiveGroupMuted (g.index, g.endMuted);
+                    }
+                    else
+                    {
+                        bus.setMuted (false);
+                        bus.setGain (gain);
+                    }
+                }
+                break;
+
             case SceneGlide::Kind::input:
                 if (g.index < (int) liveSet.inputs.size())
                 {
@@ -956,12 +1071,77 @@ void MainComponent::updateMorph()
         }
     }
 
+    for (const auto& g : sceneFxGlides)
+        applyFxGlide (g, blendFx (g.from, g.to, (float) eased), done);
+
     if (done)
     {
         sceneGlides.clear();
+        if (! sceneFxGlides.empty())
+        {
+            sceneFxGlides.clear();
+            updateRowViews();
+            updateSourceStrips();
+        }
         updateMidiLeds();
         saveSession();
     }
+}
+
+void MainComponent::applyFxGlide (const SceneFxGlide& g, const FxSettings& fx, bool done)
+{
+    // On the way: just the sound. At the end: the settings themselves, and an open FX panel showing them.
+    juce::String owner;
+    switch (g.kind)
+    {
+        case SceneFxGlide::Kind::channel:
+            for (auto& r : liveSet.rows)
+                for (auto& s : r.slots)
+                    if (s.uid == g.uid && engineFor (r).setOwnerFx (s.id, fx) && done)
+                        s.fx = fx;
+            owner = "ch." + g.uid;
+            break;
+
+        case SceneFxGlide::Kind::group:
+            for (auto& r : liveSet.rows)
+                if (r.uid == g.uid)
+                {
+                    engineFor (r).getFx().setSettings (fx);
+                    if (done) r.fx = fx;
+                }
+            owner = "grp." + g.uid;
+            break;
+
+        case SceneFxGlide::Kind::liveGroup:
+            if (const int lg = liveGroupIndex (g.uid); lg >= 0)
+            {
+                liveBuses[(size_t) lg]->getFx().setSettings (fx);
+                if (done) liveSet.liveGroups[(size_t) lg].fx = fx;
+            }
+            owner = "live." + g.uid;
+            break;
+
+        case SceneFxGlide::Kind::input:
+            if (g.index < (int) liveSet.inputs.size())
+            {
+                inputEngines[(size_t) g.index]->getFx().setSettings (fx);
+                if (done) liveSet.inputs[(size_t) g.index].fx = fx;
+            }
+            owner = "in." + juce::String (g.index);
+            break;
+
+        case SceneFxGlide::Kind::instrument:
+            if (g.index < (int) liveSet.instruments.size())
+            {
+                instrumentEngines[(size_t) g.index]->getFx().setSettings (fx);
+                if (done) liveSet.instruments[(size_t) g.index].fx = fx;
+            }
+            owner = "inst." + juce::String (g.index);
+            break;
+    }
+
+    if (done && openFxPanel != nullptr && openFxOwner == owner)
+        openFxPanel->setSettings (fx);
 }
 
 void MainComponent::setStageMode (bool on)
@@ -1023,9 +1203,9 @@ void MainComponent::updateStageView()
     }
 
     for (int i = 0; i < (int) liveSet.inputs.size(); ++i)
-        c.live.push_back ({ liveSet.inputs[(size_t) i].name, Theme::rowColour (4), liveSet.inputs[(size_t) i].muted, false, i });
+        c.live.push_back ({ liveSet.inputs[(size_t) i].name, liveGroupColour (liveSet.inputs[(size_t) i].group), liveSet.inputs[(size_t) i].muted, false, i });
     for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
-        c.live.push_back ({ instrumentName (i), Theme::accent, liveSet.instruments[(size_t) i].muted, true, i });
+        c.live.push_back ({ instrumentName (i), liveGroupColour (liveSet.instruments[(size_t) i].group), liveSet.instruments[(size_t) i].muted, true, i });
 
     stageView.setContent (std::move (c));
 }
@@ -1257,10 +1437,13 @@ void MainComponent::setZoom (float scale)
 
 void MainComponent::newSet()
 {
-    stopAll (1.0);
-    liveSet.file = juce::File();
-    loadSet (*LiveSet::makeDefault().toXml ({}), {});
-    updateFireLights();
+    confirmLeavingSet ([this]
+    {
+        stopAll (1.0);
+        liveSet.file = juce::File();
+        loadSet (*LiveSet::makeDefault().toXml ({}), {});
+        updateFireLights();
+    });
 }
 
 void MainComponent::openSet()
@@ -1273,27 +1456,34 @@ void MainComponent::openSet()
                               [this] (const juce::FileChooser& fc)
                               {
                                   const auto file = fc.getResult();
-                                  if (! file.existsAsFile())
-                                      return;
-
-                                  if (file.hasFileExtension (LiveSet::packExtension))
-                                  {
-                                      openPack (file);
-                                      return;
-                                  }
-
-                                  auto xml = juce::XmlDocument::parse (file);
-                                  if (xml == nullptr || ! xml->hasTagName ("LiveRigSet"))
-                                  {
-                                      errorMessage = file.getFileName() + " is not an Airloom set";
-                                      repaint();
-                                      return;
-                                  }
-
-                                  stopAll (1.0);
-                                  liveSet.file = file;
-                                  loadSet (*xml, file.getParentDirectory());
+                                  if (file.existsAsFile())
+                                      openSetFile (file);
                               });
+}
+
+void MainComponent::openSetFile (const juce::File& file)
+{
+    confirmLeavingSet ([this, file]
+    {
+        if (file.hasFileExtension (LiveSet::packExtension))
+        {
+            openPack (file);
+            return;
+        }
+
+        auto xml = juce::XmlDocument::parse (file);
+        if (xml == nullptr || ! xml->hasTagName ("LiveRigSet"))
+        {
+            errorMessage = file.getFileName() + " is not an Airloom set";
+            repaint();
+            return;
+        }
+
+        stopAll (1.0);
+        liveSet.file = file;
+        loadSet (*xml, file.getParentDirectory());
+        addRecentSet (file);
+    });
 }
 
 void MainComponent::saveSet (bool asNewFolder)
@@ -1407,6 +1597,7 @@ void MainComponent::saveSetTo (const juce::File& folder, bool moveFiles)
     {
         errorMessage = failed.isEmpty() ? juce::String()
                                         : "Could not " + juce::String (moveFiles ? "move" : "copy") + ": " + failed.joinIntoString (", ");
+        addRecentSet (liveSet.file);
         infoMessage = "Saved " + liveSet.getName()
                     + (moved.empty() ? juce::String()
                                      : " - " + juce::String ((int) moved.size()) + (moveFiles ? " files moved" : " files copied"))
@@ -1689,6 +1880,7 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
             loadInstrumentPlugin (i, description, liveSet.instruments[(size_t) i].state);
     }
 
+    refreshKeyButtons();
     spaceReverb.setSettings (liveSet.space);
     auto loadSlot = [this] (const juce::String& key, const LiveSet::PluginSlot& slot)
     {
@@ -1700,6 +1892,7 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
         loadSlot ("grp." + r.uid, r.insert);
     loadSlot ("master", liveSet.masterInsert);
 
+    rebuildLiveGroups();
     rebuildRows();
 
     int missing = 0;
@@ -1723,6 +1916,135 @@ void MainComponent::saveSession()
     auto* props = settings.getUserSettings();
     props->setValue ("session", liveSet.toXml (liveSet.getFolder()).get());
     props->setValue ("setFile", liveSet.file.getFullPathName());
+
+    // The set file follows shortly (the timer writes it once changes settle).
+    setFileDirty = true;
+    lastChangeMs = juce::Time::getMillisecondCounter();
+}
+
+void MainComponent::writeSetFile()
+{
+    if (! setFileDirty || restoring || liveSet.file == juce::File())
+        return;
+    setFileDirty = false;
+
+    // Moved or renamed outside Airloom while open: don't bring the old name back.
+    if (! liveSet.file.existsAsFile())
+    {
+        errorMessage = liveSet.file.getFileName() + " was moved or renamed outside Airloom - Set > Save set as new folder to keep this set";
+        repaint();
+        return;
+    }
+
+    backUpSetFile();
+    if (! liveSet.toXml (liveSet.getFolder())->writeTo (liveSet.file))
+    {
+        errorMessage = "Could not save " + liveSet.file.getFullPathName();
+        repaint();
+    }
+}
+
+void MainComponent::backUpSetFile()
+{
+    // Before overwriting: a dated copy in Backups, at most every ten minutes, the newest kept.
+    const auto now = juce::Time::getMillisecondCounter();
+    if (lastBackupMs != 0 && now - lastBackupMs < backupEveryMs)
+        return;
+    lastBackupMs = now;
+
+    const auto backups = liveSet.getFolder().getChildFile ("Backups");
+    if (! backups.createDirectory())
+        return;
+    const auto name = liveSet.getName();
+    liveSet.file.copyFileTo (backups.getChildFile (name + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S")
+                                                   + LiveSet::fileExtension));
+
+    auto old = backups.findChildFiles (juce::File::findFiles, false, juce::File::createLegalFileName (name) + " *" + LiveSet::fileExtension);
+    std::sort (old.begin(), old.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileName() > b.getFileName(); });
+    for (int i = backupsKept; i < old.size(); ++i)
+        old.getReference (i).deleteFile();   // only Airloom's own dated backups of this set
+}
+
+bool MainComponent::setHasContent() const
+{
+    for (const auto& r : liveSet.rows)
+        for (const auto& s : r.slots)
+            if (s.file != juce::File())
+                return true;
+    return ! liveSet.instruments.empty() || ! liveSet.scenes.empty();
+}
+
+void MainComponent::confirmLeavingSet (std::function<void()> then)
+{
+    // A saved set is safe: make sure its last changes are written, then carry on.
+    if (liveSet.file.existsAsFile() || ! setHasContent())
+    {
+        writeSetFile();
+        then();
+        return;
+    }
+
+    askChoice ("This set hasn't been saved",
+               "Your current set has never been saved, so opening another one would lose it.\n\nSave it first?",
+               { "Save it first", "Don't save", "Cancel" },
+               [this, then] (int r)
+               {
+                   if (r == 1) saveSet (true);   // after saving, open the other set again
+                   if (r == 2) then();
+               });
+}
+
+void MainComponent::renameSet()
+{
+    if (! liveSet.file.existsAsFile())
+        return;
+
+    askText ("Rename set", liveSet.getName(), [this] (juce::String name)
+    {
+        name = juce::File::createLegalFileName (name.trim());
+        if (name.isEmpty() || name == liveSet.getName())
+            return;
+
+        const auto renamed = liveSet.getFolder().getChildFile (name + LiveSet::fileExtension);
+        if (renamed.exists())
+        {
+            errorMessage = "There's already a " + renamed.getFileName() + " in that folder";
+            repaint();
+            return;
+        }
+
+        writeSetFile();
+        if (! liveSet.file.moveFileTo (renamed))
+        {
+            errorMessage = "Could not rename " + liveSet.file.getFileName();
+            repaint();
+            return;
+        }
+
+        liveSet.file = renamed;
+        addRecentSet (renamed);
+        saveSession();
+        infoMessage = "Renamed to " + name + " (its folder stays " + liveSet.getFolder().getFileName() + ")";
+        repaint();
+    });
+}
+
+juce::StringArray MainComponent::recentSets()
+{
+    auto list = juce::StringArray::fromLines (settings.getUserSettings()->getValue ("recentSets"));
+    list.removeEmptyStrings();
+    return list;
+}
+
+void MainComponent::addRecentSet (const juce::File& file)
+{
+    if (file == juce::File())
+        return;
+    auto list = recentSets();
+    list.removeString (file.getFullPathName(), true);
+    list.insert (0, file.getFullPathName());
+    list.removeRange (8, list.size());
+    settings.getUserSettings()->setValue ("recentSets", list.joinIntoString ("\n"));
 }
 
 //==============================================================================
@@ -1860,38 +2182,45 @@ void MainComponent::layoutRows()
 
     for (const auto& [item, r] : bounds)
     {
-        juce::Component* view = item < 0 ? static_cast<juce::Component*> (&inputsView) : rowViews[item];
+        juce::Component* view = item < 0 ? static_cast<juce::Component*> (liveGroupViews[-item - 1]) : rowViews[item];
+        if (view == nullptr)
+            continue;
         view->setBounds (r);
         bottom = juce::jmax (bottom, r.getBottom());
     }
 
-    inputsView.setFixedColumns (liveSet.inputsColumns > 0);
     rowsContent.setSize (rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2, bottom + 40);
 }
 
-std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, juce::Point<int> movingTo) const
+std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, juce::Point<int> movingTo,
+                                                                  std::map<int, juce::Point<int>>* wants) const
 {
-    // Groups (row indices, -1 for the Inputs + Looper) sit where they were put, then
-    // float up until they rest under whatever is above them, like a dashboard grid:
-    // gaps beside a tall group fill in, and a group dropped onto another pushes it down.
+    // Groups (row indices; live group g is -1 - g): see GroupLayout for the rules.
     const int width = rowsViewport.getWidth() - rowsViewport.getScrollBarThickness() - 2;
     const int rows = juce::jmin (rowViews.size(), (int) liveSet.rows.size());
+    const int lives = juce::jmin (liveGroupViews.size(), (int) liveSet.liveGroups.size());
 
-    struct Group { int item; juce::Point<int> want; juce::Point<int> size; };
+    using Group = GroupLayout::Group;
     std::vector<Group> groups;
 
-    auto sizeOf = [&] (int item)
+    // As it is now, or (expanded) as it would be open.
+    auto sizeOf = [&] (int item, bool expanded = false)
     {
-        return item < 0 ? InputsView::preferredSize (inputsView.getNumStrips(), width, liveSet.inputsColumns)
-                        : RowView::preferredSize ((int) liveSet.rows[(size_t) item].slots.size(), width,
-                                                  liveSet.rows[(size_t) item].columns, liveSet.rows[(size_t) item].collapsed);
+        if (item < 0)
+        {
+            const auto& lg = liveSet.liveGroups[(size_t) (-item - 1)];
+            return LiveGroupView::preferredSize (liveGroupSize (-item - 1), width, lg.columns, lg.collapsed && ! expanded);
+        }
+        const auto& r = liveSet.rows[(size_t) item];
+        return RowView::preferredSize ((int) r.slots.size(), width, r.columns, r.collapsed && ! expanded);
     };
 
-    groups.push_back ({ -1, liveSet.inputsPosition, sizeOf (-1) });
+    for (int g = 0; g < lives; ++g)
+        groups.push_back ({ -1 - g, liveSet.liveGroups[(size_t) g].position, sizeOf (-1 - g), sizeOf (-1 - g, true) });
     for (int i = 0; i < rows; ++i)
-        groups.push_back ({ i, liveSet.rows[(size_t) i].position, sizeOf (i) });
+        groups.push_back ({ i, liveSet.rows[(size_t) i].position, sizeOf (i), sizeOf (i, true) });
 
-    // A set that has never been arranged: inputs first, then the rows, left to right, wrapping.
+    // A set that has never been arranged: the live groups first, then the rows, left to right, wrapping.
     if (std::all_of (groups.begin(), groups.end(), [] (const Group& g) { return g.want.x < 0; }))
     {
         int x = 0, y = 0, lineHeight = 0;
@@ -1905,39 +2234,11 @@ std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, ju
             }
             g.want = { x, y };
             x += g.size.x + rowGap;
-            lineHeight = juce::jmax (lineHeight, g.size.y);
+            lineHeight = juce::jmax (lineHeight, g.fullSize.y);
         }
     }
 
-    for (auto& g : groups)
-    {
-        if (g.item == moving)
-            g.want = movingTo;
-        else if (g.want.x < 0)
-            g.want = { 0, 1 << 24 };   // new groups go to the bottom
-    }
-
-    // Top to bottom, then left to right; a group being dropped wins a tie.
-    std::stable_sort (groups.begin(), groups.end(), [moving] (const Group& a, const Group& b)
-    {
-        if (a.want.y != b.want.y) return a.want.y < b.want.y;
-        if ((a.item == moving) != (b.item == moving)) return a.item == moving;
-        return a.want.x < b.want.x;
-    });
-
-    std::map<int, juce::Rectangle<int>> placed;
-    for (const auto& g : groups)
-    {
-        const int x = juce::jlimit (0, juce::jmax (0, width - g.size.x), g.want.x);
-        int y = 0;
-        for (const auto& [other, r] : placed)
-            if (x < r.getRight() + rowGap && r.getX() < x + g.size.x + rowGap)
-                y = juce::jmax (y, r.getBottom() + rowGap);
-
-        placed[g.item] = { x, y, g.size.x, g.size.y };
-    }
-
-    return placed;
+    return GroupLayout::arrangeCollapsed (groups, width, rowGap, moving, movingTo, wants);
 }
 
 juce::Point<int> MainComponent::droppedGroupPosition (const SourceDetails& details, int& item) const
@@ -1946,10 +2247,12 @@ juce::Point<int> MainComponent::droppedGroupPosition (const SourceDetails& detai
     const auto text = details.description.toString();
     juce::Point<int> grab;
 
-    if (text == InputsView::dragId)
+    if (text.startsWith (LiveGroupView::dragPrefix))
     {
-        item = -1;
-        grab = inputsView.grabOffset;
+        const int g = text.fromFirstOccurrenceOf (LiveGroupView::dragPrefix, false, false).getIntValue();
+        item = -1 - g;
+        if (juce::isPositiveAndBelow (g, liveGroupViews.size()))
+            grab = liveGroupViews[g]->grabOffset;
     }
     else
     {
@@ -1960,24 +2263,17 @@ juce::Point<int> MainComponent::droppedGroupPosition (const SourceDetails& detai
 
     auto pos = rowsContent.getLocalPoint (this, details.localPosition) - grab;
 
-    int snapX = 0, best = std::abs (pos.x);
-    auto consider = [&] (int candidate)
-    {
-        if (std::abs (pos.x - candidate) < best) { best = std::abs (pos.x - candidate); snapX = candidate; }
-    };
-    for (auto* c : rowsContent.getChildren())
-    {
-        const bool self = (item < 0 && c == &inputsView) || (item >= 0 && item < rowViews.size() && c == rowViews[item]);
-        if (! self)
-        {
-            consider (c->getX());
-            consider (c->getRight() + rowGap);
-        }
-    }
-    if (best < 24)
-        pos.x = snapX;
+    const juce::Component* self = nullptr;
+    if (item < 0 && -item - 1 < liveGroupViews.size()) self = liveGroupViews[-item - 1];
+    if (item >= 0 && item < rowViews.size())           self = rowViews[item];
+    const int w = self != nullptr ? self->getWidth() : 0, h = self != nullptr ? self->getHeight() : 0;
 
-    return { juce::jmax (0, pos.x), juce::jmax (0, pos.y) };
+    juce::Array<juce::Rectangle<int>> others;
+    for (auto* c : rowsContent.getChildren())
+        if (c != self && (dynamic_cast<RowView*> (c) != nullptr || dynamic_cast<LiveGroupView*> (c) != nullptr))
+            others.add (c->getBounds());
+
+    return GroupLayout::snap (pos, { w, h }, others, rowGap);
 }
 
 void MainComponent::updateRowViews()
@@ -2007,6 +2303,476 @@ void MainComponent::updateRowViews()
     }
 }
 
+//==============================================================================
+int MainComponent::liveGroupIndex (const juce::String& uid) const
+{
+    for (int g = 0; g < (int) liveSet.liveGroups.size(); ++g)
+        if (liveSet.liveGroups[(size_t) g].uid == uid)
+            return g;
+    return -1;
+}
+
+std::vector<std::pair<bool, int>> MainComponent::liveMembers (int g) const
+{
+    std::vector<std::pair<bool, int>> members;
+    if (! juce::isPositiveAndBelow (g, (int) liveSet.liveGroups.size()))
+        return members;
+    const auto& uid = liveSet.liveGroups[(size_t) g].uid;
+    for (int i = 0; i < (int) liveSet.inputs.size(); ++i)
+        if (liveSet.inputs[(size_t) i].group == uid)
+            members.push_back ({ false, i });
+    for (int i = 0; i < (int) liveSet.instruments.size(); ++i)
+        if (liveSet.instruments[(size_t) i].group == uid)
+            members.push_back ({ true, i });
+
+    // In the order they were arranged (dragging sets it); until then inputs first, then instruments.
+    std::stable_sort (members.begin(), members.end(), [this] (const auto& a, const auto& b)
+    {
+        auto orderOf = [this] (const std::pair<bool, int>& m)
+        {
+            return m.first ? liveSet.instruments[(size_t) m.second].order : liveSet.inputs[(size_t) m.second].order;
+        };
+        return orderOf (a) < orderOf (b);
+    });
+    return members;
+}
+
+void MainComponent::moveLiveStrip (bool instrument, int i, int toGroup, int insertAt)
+{
+    if (! juce::isPositiveAndBelow (toGroup, (int) liveSet.liveGroups.size())
+        || ! juce::isPositiveAndBelow (i, instrument ? (int) liveSet.instruments.size() : (int) liveSet.inputs.size()))
+        return;
+
+    auto& groupOf = instrument ? liveSet.instruments[(size_t) i].group : liveSet.inputs[(size_t) i].group;
+
+    // The group's strips as they are, without the one moving (dropping it after itself counts one fewer).
+    auto members = liveMembers (toGroup);
+    const std::pair<bool, int> moving { instrument, i };
+    if (const auto it = std::find (members.begin(), members.end(), moving); it != members.end())
+    {
+        if ((int) std::distance (members.begin(), it) < insertAt)
+            --insertAt;
+        members.erase (it);
+    }
+    members.insert (members.begin() + juce::jlimit (0, (int) members.size(), insertAt), moving);
+
+    groupOf = liveSet.liveGroups[(size_t) toGroup].uid;
+    for (int n = 0; n < (int) members.size(); ++n)
+    {
+        const auto [isInstrument, index] = members[(size_t) n];
+        (isInstrument ? liveSet.instruments[(size_t) index].order : liveSet.inputs[(size_t) index].order) = n;
+    }
+
+    updateSourceStrips();
+    layoutRows();
+    saveSession();
+}
+
+LiveGroupView* MainComponent::liveGroupViewAt (juce::Point<int> pos)
+{
+    if (auto* hit = getComponentAt (pos))
+    {
+        if (auto* lv = dynamic_cast<LiveGroupView*> (hit))
+            return lv;
+        return hit->findParentComponentOfClass<LiveGroupView>();
+    }
+    return nullptr;
+}
+
+void MainComponent::toggleLiveCollapsed (int g)
+{
+    if (! juce::isPositiveAndBelow (g, (int) liveSet.liveGroups.size()))
+        return;
+    liveSet.liveGroups[(size_t) g].collapsed = ! liveSet.liveGroups[(size_t) g].collapsed;
+    updateLiveGroupViews();
+    layoutRows();
+    saveSession();
+}
+
+PadLayout MainComponent::layoutFor (int i) const
+{
+    const auto& inst = liveSet.instruments[(size_t) i];
+    if (inst.anyKey)
+        return PadLayout::anyKey (inst.padOctave);
+    PadLayout layout;
+    layout.root = inst.padRoot;
+    layout.scale = inst.padScale;
+    layout.octave = inst.padOctave;
+    return layout;
+}
+
+juce::StringArray MainComponent::keyButtonLabels() const
+{
+    juce::StringArray labels;
+    for (const auto& k : liveSet.keyButtons)
+        labels.add (PadLayout::shortName (k.root, k.scale));
+    return labels;
+}
+
+int MainComponent::activeKeyButton (int i) const
+{
+    const auto& inst = liveSet.instruments[(size_t) i];
+    if (inst.anyKey)
+        return -1;
+    for (int k = 0; k < (int) liveSet.keyButtons.size(); ++k)
+        if (liveSet.keyButtons[(size_t) k].root == inst.padRoot && liveSet.keyButtons[(size_t) k].scale == inst.padScale)
+            return k;
+    return -1;
+}
+
+void MainComponent::refreshKeyButtons()
+{
+    const auto labels = keyButtonLabels();
+    for (int i = 0; i < inputsView.instrumentStrips.size() && i < (int) liveSet.instruments.size(); ++i)
+    {
+        inputsView.instrumentStrips[i]->setChoices (labels);
+        inputsView.instrumentStrips[i]->setActiveChoice (activeKeyButton (i));
+    }
+}
+
+int MainComponent::freshColour() const
+{
+    std::array<int, Theme::numRowColours> uses {};
+    for (const auto& r : liveSet.rows)
+        ++uses[(size_t) juce::jlimit (0, Theme::numRowColours - 1, r.colour)];
+    for (const auto& lg : liveSet.liveGroups)
+        ++uses[(size_t) juce::jlimit (0, Theme::numRowColours - 1, lg.colour)];
+    return (int) std::distance (uses.begin(), std::min_element (uses.begin(), uses.end()));
+}
+
+int MainComponent::liveGroupSize (int g) const
+{
+    if (! juce::isPositiveAndBelow (g, (int) liveSet.liveGroups.size()))
+        return 0;
+    const auto& uid = liveSet.liveGroups[(size_t) g].uid;
+    return (int) std::count_if (liveSet.inputs.begin(), liveSet.inputs.end(), [&uid] (const auto& in) { return in.group == uid; })
+         + (int) std::count_if (liveSet.instruments.begin(), liveSet.instruments.end(), [&uid] (const auto& in) { return in.group == uid; });
+}
+
+juce::Colour MainComponent::liveGroupColour (const juce::String& uid) const
+{
+    const int g = liveGroupIndex (uid);
+    return g >= 0 ? Theme::rowColour (liveSet.liveGroups[(size_t) g].colour) : Theme::accent;
+}
+
+void MainComponent::applyLiveRouting()
+{
+    // Strips whose group is gone play into the first group (the set fixes their membership on load).
+    for (int i = 0; i < LiveSet::maxInputs; ++i)
+        inputBus[(size_t) i] = i < (int) liveSet.inputs.size() ? juce::jmax (0, liveGroupIndex (liveSet.inputs[(size_t) i].group)) : 0;
+    for (int i = 0; i < LiveSet::maxInstruments; ++i)
+        instrumentBus[(size_t) i] = i < (int) liveSet.instruments.size() ? juce::jmax (0, liveGroupIndex (liveSet.instruments[(size_t) i].group)) : 0;
+}
+
+void MainComponent::rebuildLiveGroups()
+{
+    liveSet.ensureLiveGroups();
+    liveGroupViews.clear();   // the strips themselves belong to inputsView
+
+    for (int g = 0; g < (int) liveSet.liveGroups.size() && g < LiveSet::maxLiveGroups; ++g)
+    {
+        auto& lg = liveSet.liveGroups[(size_t) g];
+        lg.engine = g;
+        auto& bus = *liveBuses[(size_t) g];
+        bus.setGain (dbToGain (lg.faderDb));
+        bus.setMuted (lg.muted);
+        bus.getFx().setSettings (lg.fx);
+
+        auto* view = liveGroupViews.add (new LiveGroupView());
+        view->index = g;
+        rowsContent.addAndMakeVisible (view);
+
+        const auto faderTarget = "live." + lg.uid + ".fader";
+        const auto muteTarget = "live." + lg.uid + ".mute";
+        auto& strip = view->strip;
+        strip.fader.setValue (lg.faderDb, juce::dontSendNotification);
+        strip.fader.onValueChange = [this, g]
+        {
+            auto& group = liveSet.liveGroups[(size_t) g];
+            group.faderDb = liveGroupViews[g]->strip.fader.getValue();
+            liveBuses[(size_t) g]->setGain (dbToGain (group.faderDb));
+            saveSession();
+        };
+        strip.fader.onDragStart = [this, faderTarget] { takeover[faderTarget].locked = false; };
+        strip.fader.onRightClick = [this, faderTarget, g] { showLearnMenu (faderTarget, liveSet.liveGroups[(size_t) g].name + " fader"); };
+        strip.muteButton.setToggleState (lg.muted, juce::dontSendNotification);
+        strip.muteButton.onClick = [this, g] { setLiveGroupMuted (g, liveGroupViews[g]->strip.muteButton.getToggleState()); };
+        strip.muteButton.onRightClick = [this, muteTarget, g] { showLearnMenu (muteTarget, liveSet.liveGroups[(size_t) g].name + " mute"); };
+
+        view->onHeaderMenu = [this, g] { showLiveGroupMenu (g); };
+        view->onToggleCollapsed = [this, g] { toggleLiveCollapsed (g); };
+        view->onTile = [this, g] (int t)
+        {
+            // A tile mutes or unmutes its strip.
+            const auto members = liveMembers (g);
+            if (! juce::isPositiveAndBelow (t, (int) members.size()))
+                return;
+            const auto [instrument, i] = members[(size_t) t];
+            if (instrument)
+            {
+                liveSet.instruments[(size_t) i].muted = ! liveSet.instruments[(size_t) i].muted;
+                applyInstrument (i);
+            }
+            else
+            {
+                liveSet.inputs[(size_t) i].muted = ! liveSet.inputs[(size_t) i].muted;
+                applyInput (i);
+            }
+            updateMidiLeds();
+            saveSession();
+        };
+        view->onAdd = [this, g]
+        {
+            const auto& group = liveSet.liveGroups[(size_t) g];
+            if (group.instruments)
+                addInstrument (group.uid, &liveGroupViews[g]->addButton);
+            else
+                addInput (group.uid);
+        };
+        view->onFx = [this, g]
+        {
+            const auto& group = liveSet.liveGroups[(size_t) g];
+            showFxPanel (*liveGroupViews[g], group.name, group.fx, Theme::rowColour (group.colour), [this, g] (const FxSettings& fx)
+            {
+                if (g < (int) liveSet.liveGroups.size())
+                {
+                    liveSet.liveGroups[(size_t) g].fx = fx;
+                    liveBuses[(size_t) g]->getFx().setSettings (fx);
+                    updateLiveGroupViews();
+                    saveSession();
+                }
+            }, "live." + group.uid);
+        };
+        view->resizer.onColumnsChanged = [this, g] (int columns)
+        {
+            if (g < (int) liveSet.liveGroups.size())
+            {
+                liveSet.liveGroups[(size_t) g].columns = columns;
+                layoutRows();
+                saveSession();
+            }
+        };
+        disableKeyboardFocus (*view);
+    }
+
+    applyLiveRouting();
+    updateLiveGroupViews();
+    layoutRows();
+}
+
+void MainComponent::updateLiveGroupViews()
+{
+    for (int g = 0; g < liveGroupViews.size() && g < (int) liveSet.liveGroups.size(); ++g)
+    {
+        const auto& lg = liveSet.liveGroups[(size_t) g];
+        juce::Array<juce::Component*> members;
+        std::vector<LiveGroupView::Tile> tiles;
+        for (const auto& [instrument, i] : liveMembers (g))
+        {
+            if (instrument && i < inputsView.instrumentStrips.size())
+            {
+                members.add (inputsView.instrumentStrips[i]);
+                tiles.push_back ({ instrumentName (i), ! liveSet.instruments[(size_t) i].muted });
+            }
+            else if (! instrument && i < inputsView.inputStrips.size())
+            {
+                const auto& in = liveSet.inputs[(size_t) i];
+                members.add (inputsView.inputStrips[i]);
+                tiles.push_back ({ in.name, in.monitor && ! in.muted });
+            }
+        }
+
+        auto* view = liveGroupViews[g];
+        view->setCollapsed (lg.collapsed);
+        view->setStrips (members);
+        view->setTiles (tiles);
+        view->setContent (lg.name, Theme::rowColour (lg.colour), lg.fx.anyOn(), lg.columns > 0, lg.instruments);
+        view->strip.muteButton.setToggleState (lg.muted, juce::dontSendNotification);
+        view->addButton.setEnabled (lg.instruments ? (int) liveSet.instruments.size() < LiveSet::maxInstruments
+                                                   : (int) liveSet.inputs.size() < LiveSet::maxInputs);
+    }
+}
+
+void MainComponent::setLiveGroupMuted (int g, bool muted)
+{
+    if (! juce::isPositiveAndBelow (g, (int) liveSet.liveGroups.size()))
+        return;
+    liveSet.liveGroups[(size_t) g].muted = muted;
+    liveBuses[(size_t) g]->setMuted (muted);
+    if (g < liveGroupViews.size())
+        liveGroupViews[g]->strip.muteButton.setToggleState (muted, juce::dontSendNotification);
+    updateMidiLeds();
+    saveSession();
+}
+
+void MainComponent::showAddGroupMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("Add a group");
+    m.addItem (1, "Loop group", (int) liveSet.rows.size() < LiveSet::maxRows);
+    m.addItem (2, "Input group  (mics and other interface inputs)", (int) liveSet.liveGroups.size() < LiveSet::maxLiveGroups);
+    m.addItem (3, "Instrument group  (VST3 instruments)", (int) liveSet.liveGroups.size() < LiveSet::maxLiveGroups);
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addRowButton), [this] (int r)
+    {
+        if (r == 1) addRow();
+        if (r == 2 || r == 3) addLiveGroup (r == 3);
+    });
+}
+
+void MainComponent::addLiveGroup (bool instruments)
+{
+    if ((int) liveSet.liveGroups.size() >= LiveSet::maxLiveGroups)
+    {
+        errorMessage = "Up to " + juce::String (LiveSet::maxLiveGroups) + " input and instrument groups";
+        repaint();
+        return;
+    }
+
+    int count = 0;
+    for (const auto& lg : liveSet.liveGroups)
+        count += lg.instruments == instruments ? 1 : 0;
+
+    askText (instruments ? "Name the new instrument group" : "Name the new input group",
+             (instruments ? "Instruments " : "Inputs ") + juce::String (count + 1), [this, instruments] (juce::String name)
+    {
+        if ((int) liveSet.liveGroups.size() >= LiveSet::maxLiveGroups)
+            return;
+        LiveSet::LiveGroup lg;
+        lg.name = name;
+        lg.instruments = instruments;
+        lg.colour = freshColour();
+        liveSet.liveGroups.push_back (lg);
+        rebuildLiveGroups();
+        saveSession();
+        infoMessage = name + " added - press its + to add " + (instruments ? "an instrument" : "an input")
+                    + ", or move one in from its menu";
+        repaint();
+    });
+}
+
+void MainComponent::removeLiveGroup (int g)
+{
+    if (! juce::isPositiveAndBelow (g, (int) liveSet.liveGroups.size()))
+        return;
+
+    const auto lg = liveSet.liveGroups[(size_t) g];
+
+    // Its strips move to another group of the same kind; without one, it has to be empty.
+    juce::String home;
+    for (const auto& other : liveSet.liveGroups)
+        if (other.uid != lg.uid && other.instruments == lg.instruments && home.isEmpty())
+            home = other.uid;
+
+    if (home.isEmpty() && liveGroupSize (g) > 0)
+    {
+        errorMessage = lg.name + " is the only " + (lg.instruments ? "instrument" : "input")
+                     + " group - remove or move its strips first";
+        repaint();
+        return;
+    }
+
+    for (auto& in : liveSet.inputs)
+        if (in.group == lg.uid) in.group = home;
+    for (auto& inst : liveSet.instruments)
+        if (inst.group == lg.uid) inst.group = home;
+
+    midiMap.clear ("live." + lg.uid + ".fader");
+    midiMap.clear ("live." + lg.uid + ".mute");
+    saveMidiMap();
+
+    liveSet.liveGroups.erase (liveSet.liveGroups.begin() + g);
+    liveBuses[(size_t) juce::jmin (g, LiveSet::maxLiveGroups - 1)]->getFx().setSettings ({});
+    rebuildLiveGroups();
+    updateSourceStrips();
+    saveSession();
+}
+
+void MainComponent::moveStripToGroup (bool instrument, int i, const juce::String& uid)
+{
+    // To the end of that group.
+    if (const int g = liveGroupIndex (uid); g >= 0)
+        moveLiveStrip (instrument, i, g, std::numeric_limits<int>::max() / 2);
+}
+
+void MainComponent::addMoveToGroupMenu (juce::PopupMenu& m, const juce::String& currentUid)
+{
+    juce::PopupMenu groups;
+    for (int g = 0; g < (int) liveSet.liveGroups.size(); ++g)
+        groups.addItem (900 + g, liveSet.liveGroups[(size_t) g].name, true, liveSet.liveGroups[(size_t) g].uid == currentUid);
+    m.addSubMenu ("Move to group", groups, liveSet.liveGroups.size() > 1);
+    m.addSeparator();
+}
+
+void MainComponent::showLiveGroupMenu (int g)
+{
+    if (! juce::isPositiveAndBelow (g, (int) liveSet.liveGroups.size()) || g >= liveGroupViews.size())
+        return;
+
+    const auto& lg = liveSet.liveGroups[(size_t) g];
+
+    juce::PopupMenu m;
+    m.addSectionHeader (lg.name);
+    m.addItem (8, lg.collapsed ? "Expand" : "Collapse");
+    m.addItem (9, "Collapse all groups");
+    m.addItem (10, "Expand all groups");
+    m.addSeparator();
+    m.addItem (1, "Rename...");
+    m.addItem (2, lg.instruments ? "Add an instrument" : "Add an input");
+
+    juce::PopupMenu colours;
+    for (int c = 0; c < Theme::numRowColours; ++c)
+        colours.addColouredItem (50 + c, Theme::rowColourNames[c], Theme::rowColours[c], true, lg.colour == c);
+    m.addSubMenu ("Colour", colours);
+    m.addSeparator();
+    m.addItem (6, "Remove group");
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (liveGroupViews[g]), [this, g] (int choice)
+    {
+        if (g >= (int) liveSet.liveGroups.size())
+            return;
+        auto& group = liveSet.liveGroups[(size_t) g];
+
+        if (choice == 1)
+            askText ("Rename group", group.name, [this, g] (juce::String name)
+            {
+                if (g < (int) liveSet.liveGroups.size())
+                {
+                    liveSet.liveGroups[(size_t) g].name = name;
+                    updateLiveGroupViews();
+                    saveSession();
+                }
+            });
+
+        if (choice == 8) toggleLiveCollapsed (g);
+        if (choice == 9 || choice == 10) setAllCollapsed (choice == 9);
+
+        if (choice == 2)
+        {
+            if (group.instruments)
+                addInstrument (group.uid, &liveGroupViews[g]->addButton);
+            else
+                addInput (group.uid);
+        }
+
+        if (choice >= 50 && choice < 50 + Theme::numRowColours)
+        {
+            group.colour = choice - 50;
+            updateSourceStrips();
+            saveSession();
+        }
+
+        if (choice == 6)
+        {
+            if (liveGroupSize (g) == 0)
+                removeLiveGroup (g);
+            else
+                askChoice ("Remove group", "Remove " + group.name + "? Its strips move to another group of the same kind.",
+                           { "Remove", "Cancel" }, [this, g] (int c) { if (c == 1) removeLiveGroup (g); });
+        }
+    });
+}
+
 void MainComponent::addRow (std::function<void (int)> then)
 {
     if ((int) liveSet.rows.size() >= LiveSet::maxRows)
@@ -2024,7 +2790,7 @@ void MainComponent::addRow (std::function<void (int)> then)
 
         auto r = LiveSet::makeRow (name, false);
         r.engine = engine;
-        r.colour = (int) liveSet.rows.size() % Theme::numRowColours;
+        r.colour = freshColour();
         liveSet.rows.push_back (std::move (r));
         rebuildRows();
         saveSession();
@@ -2057,6 +2823,9 @@ void MainComponent::setAllCollapsed (bool collapse)
 {
     for (auto& r : liveSet.rows)
         r.collapsed = collapse;
+    for (auto& lg : liveSet.liveGroups)
+        lg.collapsed = collapse;
+    updateLiveGroupViews();
     updateRowViews();
     layoutRows();
     saveSession();
@@ -2182,6 +2951,7 @@ void MainComponent::showChannelMenu (int row, int slot)
                         true, std::abs (s.smoothSeconds - smoothOptions[i]) < 0.01);
     m.addSubMenu ("Smooth loop point", smooth, hasFile && ! s.oneShot);
     m.addItem (50, "Play reversed", hasFile, s.reverse);
+    m.addItem (60, s.shape.isSet() ? juce::String ("Edit sample... (trimmed / shaped)") : juce::String ("Edit sample... (trim, fades, gain)"), hasFile);
 
     // Tempo: from a BPM in the file name, or from the loop's length as a whole number of bars.
     std::vector<double> tempoChoices;
@@ -2318,6 +3088,9 @@ void MainComponent::showChannelMenu (int row, int slot)
             saveSession();
         }
 
+        if (choice == 60)
+            showSampleEditor (row, slot);
+
         if (choice == 40 || choice == 41)
         {
             if (looper.getState() == Looper::State::overdubbing)
@@ -2449,7 +3222,7 @@ void MainComponent::setupInputStrip (int i, SourceStrip& s)
     s.onFx = [this, i]
     {
         const auto& in = liveSet.inputs[(size_t) i];
-        showFxPanel (*inputsView.inputStrips[i], in.name, in.fx, InputsView::colour, [this, i] (const FxSettings& fx)
+        showFxPanel (*inputsView.inputStrips[i], in.name, in.fx, liveGroupColour (in.group), [this, i] (const FxSettings& fx)
         {
             liveSet.inputs[(size_t) i].fx = fx;
             applyInput (i);
@@ -2476,7 +3249,6 @@ void MainComponent::setupInputs()
         saveSession();
     };
 
-    disableKeyboardFocus (inputsView);
     addAndMakeVisible (looperBar);
 }
 
@@ -2499,10 +3271,14 @@ void MainComponent::applyInput (int i)
     strip.muteButton.setToggleState (in.muted, juce::dontSendNotification);
 }
 
-void MainComponent::addInput()
+void MainComponent::addInput (const juce::String& groupUid)
 {
     if ((int) liveSet.inputs.size() >= LiveSet::maxInputs)
+    {
+        errorMessage = "Up to " + juce::String (LiveSet::maxInputs) + " inputs in a set";
+        repaint();
         return;
+    }
 
     // It takes the first interface input no other strip uses - or, with all of them taken
     // (a two-input interface), input 1 again: the same mic through different effects.
@@ -2522,6 +3298,7 @@ void MainComponent::addInput()
         ++channel;
 
     LiveSet::Input in;
+    in.group = groupUid.isNotEmpty() ? groupUid : liveSet.firstLiveGroup (false) != nullptr ? liveSet.firstLiveGroup (false)->uid : juce::String();
     in.channel = channel < available ? channel : 0;
     in.name = "Input " + juce::String ((int) liveSet.inputs.size() + 1);
     liveSet.inputs.push_back (in);
@@ -2640,12 +3417,19 @@ void MainComponent::showInputMenu (int i)
     m.addItem (20, "Record loops with effects", true, in.recordWithFx);
     m.addItem (21, "Record loops dry (change effects later)", true, ! in.recordWithFx);
     m.addSeparator();
+    addMoveToGroupMenu (m, in.group);
     m.addItem (40, "Remove input", liveSet.inputs.size() > 1);
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (inputsView.inputStrips[i]), [this, i, effects] (int r)
     {
         if (r == 0)
             return;
+
+        if (r >= 900 && r < 900 + (int) liveSet.liveGroups.size())
+        {
+            moveStripToGroup (false, i, liveSet.liveGroups[(size_t) (r - 900)].uid);
+            return;
+        }
 
         if (const int chosen = juce::KnownPluginList::getIndexChosenByMenu (effects, r); chosen >= 0)
         {
@@ -2688,8 +3472,14 @@ void MainComponent::showInputMenu (int i)
 //==============================================================================
 void MainComponent::updateSourceStrips()
 {
+    applyLiveRouting();
     inputsView.update (liveSet, [this] (int i) { return instrumentName (i); },
-                                [this] (int i) { return instrumentDetail (i); });
+                                [this] (int i) { return instrumentDetail (i); },
+                                [this] (bool instrument, int i)
+                                {
+                                    return liveGroupColour (instrument ? liveSet.instruments[(size_t) i].group : liveSet.inputs[(size_t) i].group);
+                                });
+    updateLiveGroupViews();
 }
 
 juce::String MainComponent::instrumentName (int i) const
@@ -2707,10 +3497,7 @@ juce::String MainComponent::instrumentName (int i) const
 juce::String MainComponent::instrumentDetail (int i) const
 {
     const auto& inst = liveSet.instruments[(size_t) i];
-    PadLayout layout;
-    layout.root = inst.padRoot;
-    layout.scale = inst.padScale;
-    layout.octave = inst.padOctave;
+    const auto layout = layoutFor (i);
 
     // When the strip shows a preset or your name, the plug-in's name leads the line under it.
     juce::String plugin;
@@ -2720,7 +3507,8 @@ juce::String MainComponent::instrumentDetail (int i) const
     const auto source = midiSourceFor (i);
     const auto from = inst.midiSource.isEmpty() ? juce::String ("All keys")
                     : inst.midiSource + (inst.midiSourceId.isNotEmpty() && ! source.connected ? " (unplugged)" : "");
-    return plugin + from + "  -  " + layout.describe() + (inst.recordWithFx ? juce::String() : "  -  dry");
+    return plugin + from + "  -  " + (inst.anyKey ? juce::String ("Any key") : layout.describe())
+         + (inst.recordWithFx ? juce::String() : "  -  dry");
 }
 
 juce::Array<juce::PluginDescription> MainComponent::instrumentTypes() const
@@ -2763,7 +3551,7 @@ void MainComponent::setupInstrumentStrip (int i, SourceStrip& s)
     s.onFx = [this, i]
     {
         showFxPanel (*inputsView.instrumentStrips[i], instrumentName (i), liveSet.instruments[(size_t) i].fx,
-                     InputsView::instrumentColour, [this, i] (const FxSettings& fx)
+                     liveGroupColour (liveSet.instruments[(size_t) i].group), [this, i] (const FxSettings& fx)
                      {
                          if (i < (int) liveSet.instruments.size())
                          {
@@ -2775,23 +3563,41 @@ void MainComponent::setupInstrumentStrip (int i, SourceStrip& s)
     };
     s.onMenu = [this, i] { showInstrumentMenu (i); };
 
-    juce::StringArray keyLabels;
-    for (auto& k : fluteKeys)
-        keyLabels.add (k.label);
-    s.setChoices (keyLabels);
+    s.setChoices (keyButtonLabels());
     s.onChoice = [this, i] (int k)
     {
+        if (! juce::isPositiveAndBelow (k, (int) liveSet.keyButtons.size()) || i >= (int) liveSet.instruments.size())
+            return;
         auto& inst = liveSet.instruments[(size_t) i];
-        inst.padRoot = fluteKeys[k].root;
-        inst.padScale = fluteKeys[k].scale;
+        inst.anyKey = false;
+        inst.padRoot = liveSet.keyButtons[(size_t) k].root;
+        inst.padScale = liveSet.keyButtons[(size_t) k].scale;
         applyInstrument (i);
-        PadLayout keys;
-        keys.root = inst.padRoot;
-        keys.scale = inst.padScale;
+        const auto keys = layoutFor (i);
+        const auto relative = keys.describeRelative();
         infoMessage = "Fire pads: " + keys.describe() + "  -  teal pads are " + PadLayout::noteNames[keys.root]
-                    + ", amber pads are " + keys.describeRelative().upToFirstOccurrenceOf (" ", false, false)
-                    + " (the relative " + keys.describeRelative().fromFirstOccurrenceOf (" ", false, false) + ")";
+                    + (relative.isEmpty() ? juce::String()
+                                          : ", amber pads are " + relative.upToFirstOccurrenceOf (" ", false, false)
+                                            + " (the relative " + relative.fromFirstOccurrenceOf (" ", false, false) + ")");
         saveSession();
+    };
+    s.onChoiceMenu = [this, i] (int k)
+    {
+        if (! juce::isPositiveAndBelow (k, (int) liveSet.keyButtons.size()) || i >= inputsView.instrumentStrips.size())
+            return;
+        const auto& b = liveSet.keyButtons[(size_t) k];
+        juce::PopupMenu m;
+        m.addSectionHeader (PadLayout::shortName (b.root, b.scale) + " key button (on every instrument)");
+        m.addItem (1, "Remove this key button");
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (inputsView.instrumentStrips[i]), [this, k] (int r)
+        {
+            if (r == 1 && juce::isPositiveAndBelow (k, (int) liveSet.keyButtons.size()))
+            {
+                liveSet.keyButtons.erase (liveSet.keyButtons.begin() + k);
+                refreshKeyButtons();
+                saveSession();
+            }
+        });
     };
 
     disableKeyboardFocus (s);
@@ -2808,11 +3614,7 @@ void MainComponent::applyInstrument (int i)
     updateMidiSources();
     engine.getFx().setSettings (inst.fx);
 
-    PadLayout layout;
-    layout.root = inst.padRoot;
-    layout.scale = inst.padScale;
-    layout.octave = inst.padOctave;
-    engine.setLayout (layout);
+    engine.setLayout (layoutFor (i));
 
     updateSourceStrips();
 
@@ -2822,24 +3624,24 @@ void MainComponent::applyInstrument (int i)
         s.strip.fader.setValue (inst.faderDb, juce::dontSendNotification);
         s.strip.muteButton.setToggleState (inst.muted, juce::dontSendNotification);
 
-        int active = -1;
-        for (int k = 0; k < (int) std::size (fluteKeys); ++k)
-            if (fluteKeys[k].root == inst.padRoot && fluteKeys[k].scale == inst.padScale)
-                active = k;
-        s.setActiveChoice (active);
+        s.setActiveChoice (activeKeyButton (i));
     }
     updateFireLights();
 }
 
-void MainComponent::addInstrument()
+void MainComponent::addInstrument (const juce::String& groupUid, juce::Component* menuTarget)
 {
     if ((int) liveSet.instruments.size() >= LiveSet::maxInstruments)
+    {
+        errorMessage = "Up to " + juce::String (LiveSet::maxInstruments) + " instruments in a set";
+        repaint();
         return;
+    }
 
     const auto types = instrumentTypes();
     if (types.isEmpty())
     {
-        infoMessage = "No instruments found yet - scan for your VST3 plug-ins, then press + INSTRUMENT again";
+        infoMessage = "No instruments found yet - scan for your VST3 plug-ins, then press + on an instrument group again";
         showPluginScanner();
         return;
     }
@@ -2850,7 +3652,8 @@ void MainComponent::addInstrument()
     m.addSeparator();
     m.addItem (1, "Scan for plug-ins...");
 
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&inputsView.addInstrumentButton), [this, types] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuTarget != nullptr ? menuTarget : &addRowButton),
+                     [this, types, groupUid] (int r)
     {
         if (r == 1)
         {
@@ -2862,7 +3665,10 @@ void MainComponent::addInstrument()
         if (chosen < 0 || (int) liveSet.instruments.size() >= LiveSet::maxInstruments)
             return;
 
-        liveSet.instruments.push_back ({});
+        LiveSet::Instrument added;
+        added.group = groupUid.isNotEmpty() ? groupUid
+                    : liveSet.firstLiveGroup (true) != nullptr ? liveSet.firstLiveGroup (true)->uid : juce::String();
+        liveSet.instruments.push_back (added);
         const int index = (int) liveSet.instruments.size() - 1;
         updateSourceStrips();
         applyInstrument (index);
@@ -3036,29 +3842,45 @@ void MainComponent::showInstrumentMenu (int i)
 
     // The Fire's pad keyboard.
     juce::PopupMenu root, scale, octave;
+    root.addItem (99, "Any key (every note)", true, inst.anyKey);
+    root.addSeparator();
     for (int n = 0; n < 12; ++n)
-        root.addItem (100 + n, PadLayout::noteNames[n], true, inst.padRoot == n);
+        root.addItem (100 + n, PadLayout::noteNames[n], true, ! inst.anyKey && inst.padRoot == n);
     for (int s = 0; s < PadLayout::numScales; ++s)
-        scale.addItem (120 + s, PadLayout::scaleNames[s], true, inst.padScale == s);
+        scale.addItem (120 + s, PadLayout::scaleNames[s], true, ! inst.anyKey && inst.padScale == s);
+    const auto bottomLeft = layoutFor (i);
     for (int o = minPadOctave; o <= maxPadOctave; ++o)
-        octave.addItem (140 + o, "Octave " + juce::String (o) + "  (bottom-left = " + PadLayout::noteNames[inst.padRoot] + juce::String (o) + ")",
+        octave.addItem (140 + o, "Octave " + juce::String (o) + "  (bottom-left = " + PadLayout::noteNames[bottomLeft.root] + juce::String (o) + ")",
                         true, inst.padOctave == o);
     juce::PopupMenu fire;
     fire.addSubMenu ("Key", root);
     fire.addSubMenu ("Scale", scale);
     fire.addSubMenu ("Octave", octave);
-    m.addSubMenu ("Fire pads: " + instrumentDetail (i).fromFirstOccurrenceOf ("-  ", false, false).upToFirstOccurrenceOf ("  -", false, false), fire);
+    const bool hasButton = std::any_of (liveSet.keyButtons.begin(), liveSet.keyButtons.end(),
+                                        [&inst] (const auto& b) { return b.root == inst.padRoot && b.scale == inst.padScale; });
+    fire.addSeparator();
+    fire.addItem (160, inst.anyKey ? juce::String ("Add key button (pick a key first)")
+                                   : "Add key button: " + PadLayout::shortName (inst.padRoot, inst.padScale),
+                  ! inst.anyKey && ! hasButton && (int) liveSet.keyButtons.size() < maxKeyButtons);
+    m.addSubMenu ("Fire pads: " + (inst.anyKey ? juce::String ("Any key") : layoutFor (i).describe()), fire);
 
     m.addSeparator();
     m.addItem (30, "Record loops with effects", true, inst.recordWithFx);
     m.addItem (31, "Record loops dry (change effects later)", true, ! inst.recordWithFx);
     m.addSeparator();
+    addMoveToGroupMenu (m, inst.group);
     m.addItem (40, "Remove instrument");
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (inputsView.instrumentStrips[i]), [this, i, types, devices] (int r)
     {
         if (i >= (int) liveSet.instruments.size() || r == 0)
             return;
+
+        if (r >= 900 && r < 900 + (int) liveSet.liveGroups.size())
+        {
+            moveStripToGroup (true, i, liveSet.liveGroups[(size_t) (r - 900)].uid);
+            return;
+        }
 
         auto& in = liveSet.instruments[(size_t) i];
 
@@ -3091,8 +3913,14 @@ void MainComponent::showInstrumentMenu (int i)
         if (r == 4) in.label = {};
         if (r == 10) { in.midiSource = {}; in.midiSourceId = {}; }
         if (r >= 11 && r < 11 + devices.size()) { in.midiSource = devices[r - 11].name; in.midiSourceId = devices[r - 11].identifier; }
-        if (r >= 100 && r < 112) in.padRoot = r - 100;
-        if (r >= 120 && r < 120 + PadLayout::numScales) in.padScale = r - 120;
+        if (r == 99) in.anyKey = true;
+        if (r >= 100 && r < 112) { in.padRoot = r - 100; in.anyKey = false; }
+        if (r >= 120 && r < 120 + PadLayout::numScales) { in.padScale = r - 120; in.anyKey = false; }
+        if (r == 160)
+        {
+            liveSet.keyButtons.push_back ({ in.padRoot, in.padScale });
+            refreshKeyButtons();
+        }
         if (r >= 140 + minPadOctave && r <= 140 + maxPadOctave) in.padOctave = r - 140;
         if (r == 30 || r == 31) in.recordWithFx = r == 30;
 
@@ -3327,6 +4155,8 @@ void MainComponent::recPressed()
     if (state == Looper::State::waiting)
     {
         looper.cancelStart();
+        recordSources.clear();
+        routeAllArmedToTrackZero();
         infoMessage = "Count-in called off";
         repaint();
         return;
@@ -3341,6 +4171,27 @@ void MainComponent::recPressed()
         repaint();
         return;
     }
+
+    // Each armed source on a track of its own, named for its loop channel: an instrument by its
+    // name (its preset, usually) and key, an input by its name and the key being played in.
+    recordSources.clear();
+    PadLayout playing;
+    const auto playingKey = currentKey (playing) ? playing.keyName() : juce::String();
+    for (int i = 0; i < LiveSet::maxInputs; ++i)
+    {
+        const bool armed = i < (int) liveSet.inputs.size() && liveSet.inputs[(size_t) i].armed;
+        inputTrack[(size_t) i] = armed ? (int) recordSources.size() : -1;
+        if (armed)
+            recordSources.push_back ({ false, i, liveSet.inputs[(size_t) i].name, playingKey });
+    }
+    for (int i = 0; i < LiveSet::maxInstruments; ++i)
+    {
+        const bool armed = i < (int) liveSet.instruments.size() && liveSet.instruments[(size_t) i].armed;
+        instrumentTrack[(size_t) i] = armed ? (int) recordSources.size() : -1;
+        if (armed)
+            recordSources.push_back ({ true, i, instrumentName (i), layoutFor (i).keyName() });
+    }
+    looper.setTracks ((int) recordSources.size());
 
     // On the bar: the take starts a round trip after the bar line, when the note the
     // performer plays on "1" (in time with what they hear) reaches the looper.
@@ -3358,24 +4209,35 @@ void MainComponent::nudgeFireVolume (const juce::String& fireName, int steps)
         if (fire.name == fireName)
             fireId = fire.inputId;
 
+    // Each fader has a level the knob tracks, which can go below off: a quiet one held at off
+    // while the knob keeps turning down comes back in at its old distance from the others on
+    // the way up. Moving a fader any other way (on screen, MidiMix, a scene) starts afresh from there.
     std::vector<int> attached;
-    double loudest = -60.0;
+    std::vector<double> tracked;
+    auto levelOf = [this] (int i) -> KnobLevel& { return knobLevels[liveSet.instruments[(size_t) i].name + "#" + juce::String (i)]; };
+
     for (int i = 0; i < (int) liveSet.instruments.size() && i < inputsView.instrumentStrips.size(); ++i)
         if (InstrumentChannel::playsFrom (midiSourceFor (i), fireName, fireId))
         {
+            auto& level = levelOf (i);
+            const double shown = inputsView.instrumentStrips[i]->strip.fader.getValue();
+            if (std::abs (level.shown - shown) > 0.01)
+                level = { shown, shown };
             attached.push_back (i);
-            loudest = juce::jmax (loudest, inputsView.instrumentStrips[i]->strip.fader.getValue());
+            tracked.push_back (level.tracked);
         }
 
-    // Every fader moves by the same dB (set by the loudest one), so the balance holds.
-    const double change = MidiMap::nudgeDb (loudest, steps) - loudest;
+    MidiMap::nudgeTogether (tracked, steps);
 
     juce::StringArray levels;
-    for (int i : attached)
+    for (size_t n = 0; n < attached.size(); ++n)
     {
-        auto& fader = inputsView.instrumentStrips[i]->strip.fader;
-        const double db = juce::jlimit (-60.0, 6.0, fader.getValue() + change);
-        fader.setValue (db, juce::sendNotificationSync);   // as if moved on screen: sets the level and saves
+        const int i = attached[n];
+        auto& level = levelOf (i);
+        level.tracked = tracked[n];
+        const double db = juce::jlimit (-60.0, 6.0, level.tracked);
+        level.shown = db;
+        inputsView.instrumentStrips[i]->strip.fader.setValue (db, juce::sendNotificationSync);   // as if moved on screen
         levels.add (instrumentName (i) + " " + (db <= -60.0 ? juce::String ("off") : juce::String (db, 1) + " dB"));
     }
 
@@ -3442,9 +4304,7 @@ bool MainComponent::currentKey (PadLayout& key, const juce::String& fireName, co
                                                      : InstrumentChannel::playsFrom (midiSourceFor (i), fireName, fireId);
         if (instrumentEngines[(size_t) i]->getPlugin() != nullptr && fromThisFire)
         {
-            key.root = inst.padRoot;
-            key.scale = inst.padScale;
-            key.octave = inst.padOctave;
+            key = layoutFor (i);   // Any key: chromatic from C, which has no key name
             return true;
         }
     }
@@ -3469,12 +4329,31 @@ juce::String MainComponent::nextLoopLabel (const Row& row) const
     return name + " " + juce::String (highest + 1);
 }
 
+void MainComponent::routeAllArmedToTrackZero()
+{
+    for (auto& t : inputTrack)      t = 0;
+    for (auto& t : instrumentTrack) t = 0;
+}
+
+juce::String MainComponent::nextLoopLabelFor (const Row& row, const juce::String& base) const
+{
+    int highest = 0;
+    for (const auto& s : row.slots)
+        if (s.file != juce::File() && s.label.startsWith (base + " ")
+            && s.label.substring (base.length() + 1).containsOnly ("0123456789"))
+            highest = juce::jmax (highest, s.label.substring (base.length() + 1).getIntValue());
+    return base + " " + juce::String (highest + 1);
+}
+
 void MainComponent::collectFinishedTake()
 {
     juce::AudioBuffer<float> audio;
     juce::int64 takeStart = 0;
     if (! looper.collectTake (audio, takeStart))
         return;
+
+    const auto sources = std::exchange (recordSources, {});
+    routeAllArmedToTrackZero();
 
     const double sr = currentSampleRate;
     if (audio.getNumSamples() < (int) (sr * 0.25))
@@ -3490,30 +4369,73 @@ void MainComponent::collectFinishedTake()
         return;
     }
 
-    auto clip = std::make_shared<LoopClip>();
-    clip->sampleRate = sr;
-    clip->data = std::move (audio);
+    // One loop channel per track. With several, a source that stayed silent gets none.
+    const int tracks = audio.getNumChannels() / 2;
+    std::vector<int> keep;
+    for (int t = 0; t < tracks; ++t)
+        if (tracks == 1 || juce::jmax (audio.getMagnitude (2 * t, 0, audio.getNumSamples()),
+                                       audio.getMagnitude (2 * t + 1, 0, audio.getNumSamples())) > 0.0005f)
+            keep.push_back (t);
+    if (keep.empty())
+        keep.push_back (0);
 
     auto& row = liveSet.rows[(size_t) rowIndex];
+    const bool firstLoop = ! anyLoopPlaying();
+    juce::StringArray made;
+    int firstId = -1;
 
-    // The first empty channel in the row, or a new one.
-    auto it = std::find_if (row.slots.begin(), row.slots.end(), [] (const Slot& s) { return s.file == juce::File(); });
-    if (it == row.slots.end())
+    for (int t : keep)
     {
-        row.slots.push_back ({});
-        it = row.slots.end() - 1;
+        auto clip = std::make_shared<LoopClip>();
+        clip->sampleRate = sr;
+        clip->data.setSize (2, audio.getNumSamples());
+        clip->data.copyFrom (0, 0, audio, 2 * t, 0, audio.getNumSamples());
+        clip->data.copyFrom (1, 0, audio, 2 * t + 1, 0, audio.getNumSamples());
+
+        // The first empty channel in the row, or a new one.
+        auto it = std::find_if (row.slots.begin(), row.slots.end(), [] (const Slot& s) { return s.file == juce::File(); });
+        if (it == row.slots.end())
+        {
+            row.slots.push_back ({});
+            it = row.slots.end() - 1;
+        }
+
+        // Named after its source and key ("Flume Pad A minor 1"); a lone source with no name to go by: "Loop A minor 1".
+        auto& slot = *it;
+        slot = {};
+        if (juce::isPositiveAndBelow (t, (int) sources.size()) && (tracks > 1 || sources[(size_t) t].instrument))
+        {
+            const auto& src = sources[(size_t) t];
+            slot.label = nextLoopLabelFor (row, (src.name + " " + src.key).trim());
+        }
+        else
+        {
+            slot.label = nextLoopLabel (row);
+        }
+        slot.file = recordingsFolder().getNonexistentChildFile (slot.label + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"), ".wav");
+        clip->file = slot.file;
+        slot.liveClip = clip;
+
+        clipCache[clipKey (slot)] = clip;
+        cacheBytes += clipBytes (clip);
+
+        // All start together, phase-locked to when the performer played the first sample.
+        slot.anchor = takeStart - roundTripLatency;
+        if (engineFor (row).startLoop (slot.id, clip, 0.01, dbToGain (slot.volumeDb), slot.anchor))
+            slot.playing = true;
+
+        if (firstId < 0)
+            firstId = slot.id;
+        made.add (slot.label);
+        persistLiveClip (slot);
+        addToPool ({ slot.file });
     }
 
-    auto& slot = *it;
-    slot = {};
-    slot.label = nextLoopLabel (row);
-    slot.file = recordingsFolder().getNonexistentChildFile (slot.label + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"), ".wav");
-    clip->file = slot.file;
-    slot.liveClip = clip;
-
-    clipCache[clipKey (slot)] = clip;
-    cacheBytes += clipBytes (clip);
-    clip->file = slot.file;
+    auto [firstRow, firstSlot] = liveSet.findSlot (firstId);
+    if (firstSlot == nullptr)
+        return;
+    auto& slot = *firstSlot;
+    auto clip = slot.liveClip;
 
     if (firstLoopLength == 0)
         firstLoopLength = clip->data.getNumSamples();
@@ -3521,7 +4443,6 @@ void MainComponent::collectFinishedTake()
     // The first loop of free length, with nothing else playing, sets the tempo: the BPM
     // becomes the one (of those a whole number of bars fits) nearest the current one.
     juce::String tempoNote;
-    const bool firstLoop = ! anyLoopPlaying();
     if (firstLoop && liveSet.loopLength == LiveSet::LoopLength::free)
     {
         const auto fit = TempoGuess::nearest (clip->data.getNumSamples() / sr, liveSet.bpm, liveSet.beatsPerBar);
@@ -3533,18 +4454,12 @@ void MainComponent::collectFinishedTake()
         }
     }
 
-    // Carry straight on: phase-lock playback to when the performer actually played
-    // the first sample (the input arrived a round trip later).
-    slot.anchor = takeStart - roundTripLatency;
     if (firstLoop)
         beatAnchor = slot.anchor;   // the beat grid starts with the first loop
-    if (engineFor (row).startLoop (slot.id, clip, 0.01, dbToGain (slot.volumeDb), slot.anchor))
-        slot.playing = true;
 
     dubTargetId = slot.id;
-    persistLiveClip (slot);
-    addToPool ({ slot.file });
-    infoMessage = slot.label + " recorded (" + formatTime (clip->data.getNumSamples() / sr) + ")" + tempoNote + " - DUB to layer on top";
+    infoMessage = made.joinIntoString (", ") + " recorded (" + formatTime (clip->data.getNumSamples() / sr) + ")" + tempoNote
+                + (made.size() > 1 ? " - each on its own channel" : " - DUB to layer on top");
     updateRowViews();
 }
 
@@ -3599,10 +4514,88 @@ void MainComponent::swapPlayingClip (Row& row, Slot& slot, LoopClipPtr clip)
     }
 }
 
+void MainComponent::showSampleEditor (int row, int slot)
+{
+    if (! juce::isPositiveAndBelow (row, (int) liveSet.rows.size()) || ! juce::isPositiveAndBelow (slot, (int) liveSet.rows[(size_t) row].slots.size()))
+        return;
+
+    // The editor shows the sample as it plays (reversed if so), before its trim: that version is loaded first.
+    Slot whole = liveSet.rows[(size_t) row].slots[(size_t) slot];
+    whole.shape = {};
+    whole.smoothSeconds = 0.0;
+    whole.liveClip = nullptr;
+    const auto uid = whole.uid;
+
+    withClip (whole, [this, uid] (LoopClipPtr clip)
+    {
+        int r = -1, s = -1;
+        if (clip == nullptr || ! findSlotByUid (uid, r, s) || r >= rowViews.size())
+            return;
+
+        const auto& rw = liveSet.rows[(size_t) r];
+        const auto& sl = rw.slots[(size_t) s];
+        auto* card = rowViews[r]->getCard (s);
+        if (card == nullptr)
+            return;
+
+        const auto name = sl.label.isNotEmpty() ? sl.label : sl.file.getFileNameWithoutExtension();
+        auto editor = std::make_unique<SampleEditor> (name, clip, sl.shape, Theme::rowColour (rw.colour), ! sl.oneShot,
+                                                      60.0 / liveSet.bpm, liveSet.beatsPerBar);
+        editor->onChange = [this, id = sl.id] (const SampleShape& shape) { applySampleShape (id, shape); };
+        editor->onPlay = [this, uid]
+        {
+            int pr = -1, ps = -1;
+            if (findSlotByUid (uid, pr, ps))
+                playPressed (pr, ps);
+        };
+        editor->isPlaying = [this, id = sl.id]
+        {
+            auto [pr, ps] = liveSet.findSlot (id);
+            return ps != nullptr && ps->playing;
+        };
+        juce::CallOutBox::launchAsynchronously (std::move (editor), card->getScreenBounds(), nullptr);
+    });
+}
+
+void MainComponent::applySampleShape (int slotId, const SampleShape& shape)
+{
+    auto [rw, sl] = liveSet.findSlot (slotId);
+    if (sl == nullptr || sl->shape == shape)
+        return;
+
+    if (overdubSlotId == slotId)
+        stopOverdubbing();
+
+    // An overdubbed loop is saved as a recording by now: edits start from that file again.
+    sl->liveClip = nullptr;
+    sl->undoClip = nullptr;
+    sl->shape = shape;
+
+    // A playing loop crossfades to the new version, keeping its timing; a one-shot uses it next time.
+    withClip (*sl, [this, slotId] (LoopClipPtr clip)
+    {
+        auto [r, s] = liveSet.findSlot (slotId);
+        if (clip != nullptr && s != nullptr && ! s->oneShot)
+            swapPlayingClip (*r, *s, clip);
+    });
+
+    updateRowViews();
+    saveSession();
+}
+
 void MainComponent::persistLiveClip (Slot& slot)
 {
     if (slot.liveClip == nullptr)
         return;
+
+    // The edited loop already has its trim, fades and gain in it: they're done, not to be applied again.
+    if (slot.shape.isSet())
+    {
+        clipCache.erase (clipKey (slot));
+        slot.shape = {};
+        slot.smoothSeconds = 0.0;
+        clipCache[clipKey (slot)] = slot.liveClip;
+    }
 
     // Edited loops are saved as new recordings, never over a sample from elsewhere.
     if (! slot.file.isAChildOf (recordingsFolder()))
@@ -3677,6 +4670,7 @@ void MainComponent::dubPressed()
     }
 
     slot->undoClip = std::make_shared<LoopClip> (*slot->liveClip);
+    routeAllArmedToTrackZero();   // an overdub hears every armed source together
     looper.startOverdub (slot->liveClip, slot->anchor);
     overdubSlotId = slot->id;
 }
@@ -4012,6 +5006,17 @@ bool MainComponent::changeFx (const juce::String& owner, const std::function<voi
         change (liveSet.instruments[(size_t) i].fx);
         applyInstrument (i);
         changed = &liveSet.instruments[(size_t) i].fx;
+    }
+    else if (owner.startsWith ("live."))
+    {
+        const int g = liveGroupIndex (owner.fromFirstOccurrenceOf ("live.", false, false));
+        if (g < 0)
+            return false;
+        auto& lg = liveSet.liveGroups[(size_t) g];
+        change (lg.fx);
+        liveBuses[(size_t) g]->getFx().setSettings (lg.fx);
+        changed = &lg.fx;
+        updateLiveGroupViews();
     }
     else if (owner.startsWith ("grp."))
     {
@@ -4433,12 +5438,34 @@ void MainComponent::showPoolMenu (const juce::Array<juce::File>& files)
     for (int r = 0; r < (int) liveSet.rows.size(); ++r)
         m.addItem (100 + r, "Add to " + liveSet.rows[(size_t) r].name);
 
+    // Into one of the panel's folders (the file itself stays put).
+    const auto folders = pool.folderNames();
+    juce::PopupMenu moveTo;
+    for (int f = 0; f < folders.size(); ++f)
+        moveTo.addItem (300 + f, folders[f], true, files.size() == 1 && pool.folderOf (files[0]) == folders[f]);
+    moveTo.addSeparator();
+    moveTo.addItem (299, "New folder...");
+    m.addSeparator();
+    m.addSubMenu ("Move to folder", moveTo);
+
     m.addSeparator();
     m.addItem (1, "Remove from samples");
     m.addItem (2, "Show in Explorer", files.size() == 1);
 
-    m.showMenuAsync (juce::PopupMenu::Options(), [this, files] (int choice)
+    m.showMenuAsync (juce::PopupMenu::Options(), [this, files, folders] (int choice)
     {
+        if (choice >= 300 && choice < 300 + folders.size())
+            pool.moveToFolder (files, folders[choice - 300]);
+        if (choice == 299)
+            askText ("New folder", "", [this, files] (juce::String name)
+            {
+                if (name.trim().isNotEmpty())
+                {
+                    pool.makeFolder (name.trim());
+                    pool.moveToFolder (files, name.trim());
+                }
+            });
+
         if (choice >= 100 && choice < 100 + (int) liveSet.rows.size())
             appendToRow (choice - 100, files);
 
@@ -4529,6 +5556,7 @@ void MainComponent::withClip (const Slot& slot, std::function<void (LoopClipPtr)
     const auto file = slot.file;
     const auto smoothSeconds = smoothingFor (slot);
     const bool reversed = slot.reverse;
+    const auto shape = slot.shape;
     const auto key = clipKey (slot);
 
     if (auto it = clipCache.find (key); it != clipCache.end())
@@ -4548,16 +5576,20 @@ void MainComponent::withClip (const Slot& slot, std::function<void (LoopClipPtr)
     juce::Component::SafePointer<MainComponent> safe (this);
     auto* formats = &formatManager;
 
-    loader.addJob ([safe, formats, file, key, smoothSeconds, reversed]
+    loader.addJob ([safe, formats, file, key, smoothSeconds, reversed, shape]
     {
         juce::String error;
         auto clip = loadLoopClip (file, *formats, error);
 
-        if (clip != nullptr && smoothSeconds > 0.0)
-            clip = makeSeamlessLoop (clip, smoothSeconds);
-
+        // In playback order: reversed, then trimmed and shaped, then (for loops) the seam smoothed.
         if (clip != nullptr && reversed)
             clip = makeReversed (*clip);
+
+        if (clip != nullptr && shape.isSet())
+            clip = makeShaped (*clip, shape);
+
+        if (clip != nullptr && smoothSeconds > 0.0)
+            clip = makeSeamlessLoop (clip, smoothSeconds);
 
         juce::MessageManager::callAsync ([safe, key, clip, error]
         {
@@ -4666,7 +5698,7 @@ bool MainComponent::isInterestedInDragSource (const SourceDetails& details)
 {
     const auto text = details.description.toString();
     return text.startsWith (SamplePool::dragPrefix) || text.startsWith (ChannelCard::dragPrefix)
-        || text.startsWith (RowView::dragPrefix);
+        || text.startsWith (RowView::dragPrefix) || text.startsWith (SourceStrip::dragPrefix);
 }
 
 juce::Component* MainComponent::groupViewAt (juce::Point<int> pos)
@@ -4675,8 +5707,10 @@ juce::Component* MainComponent::groupViewAt (juce::Point<int> pos)
         return rv;
 
     if (auto* hit = getComponentAt (pos))
-        if (hit == &inputsView || hit->findParentComponentOfClass<InputsView>() != nullptr)
-            return &inputsView;
+        if (auto* lv = dynamic_cast<LiveGroupView*> (hit))
+            return lv;
+        else if (auto* parent = hit->findParentComponentOfClass<LiveGroupView>())
+            return parent;
 
     return nullptr;
 }
@@ -4699,7 +5733,11 @@ void MainComponent::clearDropMarkers()
         rv->setDropMarker (-1);
         rv->setGroupDropSide (0);
     }
-    inputsView.setGroupDropSide (0);
+    for (auto* lv : liveGroupViews)
+    {
+        lv->setGroupDropSide (0);
+        lv->setDropMarker (-1);
+    }
     rowsContent.showGhost ({}, {});
 }
 
@@ -4710,10 +5748,20 @@ void MainComponent::itemDragMove (const SourceDetails& details)
     {
         int item = 0;
         const auto pos = droppedGroupPosition (details, item);
-        const auto colour = item < 0 ? InputsView::colour
+        const auto colour = item < 0 ? (juce::isPositiveAndBelow (-item - 1, (int) liveSet.liveGroups.size())
+                                           ? Theme::rowColour (liveSet.liveGroups[(size_t) (-item - 1)].colour) : Theme::accent)
                                      : juce::isPositiveAndBelow (item, (int) liveSet.rows.size())
                                          ? Theme::rowColour (liveSet.rows[(size_t) item].colour) : Theme::accent;
         rowsContent.showGhost (arrangeGroups (item, pos)[item], colour);
+        return;
+    }
+
+    // An input or instrument strip: show where it would land in the live group under it.
+    if (details.description.toString().startsWith (SourceStrip::dragPrefix))
+    {
+        auto* target = liveGroupViewAt (details.localPosition);
+        for (auto* lv : liveGroupViews)
+            lv->setDropMarker (lv == target ? lv->dropIndexAt (lv->getLocalPoint (this, details.localPosition)) : -1);
         return;
     }
 
@@ -4744,14 +5792,25 @@ void MainComponent::itemDropped (const SourceDetails& details)
             return;
 
         // Keep every group where it now lands, so the arrangement stays as it is.
-        for (const auto& [i, r] : arrangeGroups (item, pos))
+        std::map<int, juce::Point<int>> wants;
+        arrangeGroups (item, pos, &wants);
+        for (const auto& [i, p] : wants)
         {
-            if (i < 0) liveSet.inputsPosition = r.getPosition();
-            else       liveSet.rows[(size_t) i].position = r.getPosition();
+            if (i < 0) { if (-i - 1 < (int) liveSet.liveGroups.size()) liveSet.liveGroups[(size_t) (-i - 1)].position = p; }
+            else       liveSet.rows[(size_t) i].position = p;
         }
 
         layoutRows();
         saveSession();
+        return;
+    }
+
+    if (text.startsWith (SourceStrip::dragPrefix))
+    {
+        const auto what = text.fromFirstOccurrenceOf (SourceStrip::dragPrefix, false, false);
+        if (auto* lv = liveGroupViewAt (details.localPosition))
+            moveLiveStrip (what.startsWith ("inst:"), what.getTrailingIntValue(), lv->index,
+                           lv->dropIndexAt (lv->getLocalPoint (this, details.localPosition)));
         return;
     }
 
@@ -5125,6 +6184,21 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
             continue;
         }
 
+        // A live group: "live.<uid>.fader" or ".mute".
+        if (target.startsWith ("live."))
+        {
+            const int g = liveGroupIndex (target.fromFirstOccurrenceOf ("live.", false, false).upToLastOccurrenceOf (".", false, false));
+            const auto control = target.fromLastOccurrenceOf (".", false, false);
+            if (g < 0 || g >= liveGroupViews.size())
+                continue;
+
+            if (control == "fader" && m.isController())
+                applyFaderMidi (target, liveGroupViews[g]->strip, proportion);
+            else if (control == "mute" && pressed)
+                setLiveGroupMuted (g, ! liveSet.liveGroups[(size_t) g].muted);
+            continue;
+        }
+
         if (target.startsWith ("inputFader."))
         {
             if (const int i = target.getTrailingIntValue(); m.isController() && i < inputsView.inputStrips.size())
@@ -5288,6 +6362,8 @@ void MainComponent::updateMidiLeds (bool allOff)
     for (const auto& row : liveSet.rows)
     {
         want ("grp." + row.uid + ".mute", ! row.muted);   // lit = group is on, like most DAWs
+    for (const auto& lg : liveSet.liveGroups)
+        want ("live." + lg.uid + ".mute", ! lg.muted);
         for (const auto& slot : row.slots)
         {
             // A loop waiting for its beat (to start or to stop) blinks.
@@ -5542,6 +6618,18 @@ void MainComponent::timerCallback()
     updatePerfMeter();
     updateFireLightShow();
 
+    if (setFileDirty && juce::Time::getMillisecondCounter() - lastChangeMs > autosaveDelayMs)
+        writeSetFile();
+
+    // An effect that ran away was emptied on the audio thread; say so and keep a record.
+    if (const int runaways = FxChain::runaways.load(); runaways != runawaysSeen)
+    {
+        runawaysSeen = runaways;
+        errorMessage = "An effect went out of control and was reset (logged in " + CrashLog::logFile().getFullPathName() + ")";
+        CrashLog::writeLine ("Effect runaway caught and reset (total this run: " + juce::String (runaways) + ")");
+        repaint();
+    }
+
     if (juce::Time::getMillisecondCounter() - lastPresetCheck > 2000)
     {
         lastPresetCheck = juce::Time::getMillisecondCounter();
@@ -5618,6 +6706,13 @@ void MainComponent::timerCallback()
         const auto [l, r] = inputEngines[(size_t) i]->takePeaks();
         inputsView.inputStrips[i]->strip.meter.pushPeak (0, l);
         inputsView.inputStrips[i]->strip.meter.pushPeak (1, r);
+    }
+
+    for (int g = 0; g < liveGroupViews.size(); ++g)
+    {
+        const auto [l, r] = liveBuses[(size_t) g]->takePeaks();
+        liveGroupViews[g]->strip.meter.pushPeak (0, l);
+        liveGroupViews[g]->strip.meter.pushPeak (1, r);
     }
 
     masterStrip.meter.pushPeak (0, masterPeakL.exchange (0.0f));
@@ -5738,6 +6833,11 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawHorizontalLine (headerBottom, 0.0f, (float) getWidth());
     g.drawHorizontalLine (footerTop, 0.0f, (float) getWidth());
 
+    // The transport in sections: stop and freeze | the looper | fade time | tempo.
+    g.setColour (Theme::panelEdge);
+    for (int x : transportDividers)
+        g.fillRect ((float) x, (float) freezeButton.getY() + 2.0f, 1.0f, (float) freezeButton.getHeight() - 4.0f);
+
     // Header: app name, set name and audio device status.
     auto header = headerArea;
     static const auto logoImage = juce::ImageCache::getFromMemory (BinaryData::AppIcon_png, BinaryData::AppIcon_pngSize);
@@ -5745,8 +6845,8 @@ void MainComponent::paint (juce::Graphics& g)
 
     header.removeFromLeft (10);
     g.setColour (Theme::text);
-    g.setFont (Theme::heading (19.0f, 0.22f));
-    g.drawText ("AIRLOOM", header.removeFromLeft (124), juce::Justification::centredLeft);
+    g.setFont (Theme::heading (19.0f, 0.34f));
+    g.drawText ("AIRLOOM", header.removeFromLeft (142), juce::Justification::centredLeft);
 
     g.setColour (Theme::panelEdge);
     g.fillRect (header.removeFromLeft (1).reduced (0, 6));
@@ -5882,6 +6982,10 @@ void MainComponent::resized()
     const int looperX = juce::jlimit (controls.getX(), juce::jmax (controls.getX(), controls.getRight() - LooperBar::buttonsWidth - 160), centredX);
     const int looperWidth = juce::jmin (640, controls.getRight() - looperX);
     looperBar.setBounds (controls.withX (looperX).withWidth (looperWidth));
+
+    transportDividers = { (freezeButton.getRight() + looperBar.getX()) / 2,
+                          fadeTimeLabel.getX() - gap / 2,
+                          (fadeTimeSlider.getRight() + (bpmLabel.isVisible() ? bpmLabel.getX() : beatIndicator.getX())) / 2 };
 
     messageArea = area.removeFromBottom (30);
     area.removeFromBottom (6);

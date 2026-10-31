@@ -93,7 +93,7 @@ public:
             g.setColour (grp.colour);
             g.setFont (Theme::heading (15.0f, 0.12f));
             g.drawText (grp.name.toUpperCase(), gr.header.withTrimmedRight (gr.mute.getWidth() + 8.0f), juce::Justification::centredLeft, true);
-            drawToggle (g, gr.mute, grp.muted ? "MUTED" : "MUTE", grp.muted, Theme::danger);
+            drawToggle (g, gr.mute, grp.muted ? "MUTED" : "MUTE", grp.muted, Theme::panelEdge.brighter (0.3f));
 
             for (size_t ti = 0; ti < grp.tiles.size() && ti < gr.tiles.size(); ++ti)
                 drawTile (g, gr.tiles[ti], grp.tiles[ti], grp.colour);
@@ -117,7 +117,7 @@ public:
             g.setFont (juce::FontOptions (19.0f, juce::Font::bold));
             g.drawFittedText (l.name, r.reduced (18.0f, 4.0f).withTrimmedRight (70.0f).toNearestInt(), juce::Justification::centredLeft, 1);
             g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-            g.setColour (l.muted ? Theme::danger : Theme::accent);
+            g.setColour (l.muted ? Theme::textDim : Theme::accent);
             g.drawText (l.muted ? "MUTED" : "ON", r.withTrimmedRight (14.0f), juce::Justification::centredRight);
         }
 

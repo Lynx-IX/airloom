@@ -123,7 +123,8 @@ void InstrumentChannel::handleMidi (const juce::String& deviceName, const juce::
         collector.addMessageToQueue (m);
 }
 
-void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample, int numSamples, juce::AudioBuffer<float>& recordBus)
+void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample, int numSamples, juce::AudioBuffer<float>& recordBus,
+                                 juce::AudioBuffer<float>* sendBus, bool silencedAfter)
 {
     const juce::SpinLock::ScopedTryLockType sl (pluginLock);
 
@@ -140,12 +141,35 @@ void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample,
     const bool record = armed, wet = recordWithFx;
     const int pluginChannels = pluginBuffer.getNumChannels();
 
+    // Muted and faded out (here or in its group), and not recording: nothing would be heard, so the
+    // plug-in isn't run at all. Notes played meanwhile are dropped; waking up, it gets "all notes
+    // off" so nothing held from before hangs, and its effects start without an old tail.
+    const bool fadedOut = muted && ! gain.isSmoothing() && gain.getCurrentValue() <= 0.0f;
+    if (! record && (silencedAfter || fadedOut))
+    {
+        if (! resting.exchange (true))
+            fx.requestClear();
+        midi.clear();
+        collector.removeNextBlockOfMessages (midi, juce::jmax (1, numSamples));
+        midi.clear();
+        gain.skip (numSamples);
+        return;
+    }
+    const bool waking = resting.exchange (false);
+
     for (int done = 0; done < numSamples;)
     {
         const int n = juce::jmin (numSamples - done, blockSize);
 
         midi.clear();
         collector.removeNextBlockOfMessages (midi, n);
+
+        if (waking && done == 0)
+            for (int ch = 1; ch <= 16; ++ch)
+            {
+                midi.addEvent (juce::MidiMessage::controllerEvent (ch, 64, 0), 0);   // sustain pedal up
+                midi.addEvent (juce::MidiMessage::allNotesOff (ch), 0);
+            }
 
         // A view onto the preallocated buffer at this chunk's length: no allocation.
         juce::AudioBuffer<float> view (pluginBuffer.getArrayOfWritePointers(), pluginChannels, n);
@@ -187,7 +211,15 @@ void InstrumentChannel::process (juce::AudioBuffer<float>& out, int startSample,
         for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)
             out.addFrom (ch, startSample + done, stereo, ch, 0, n);
         for (int ch = 0; ch < 2; ++ch)
-            SpaceReverb::addToBus (ch, done, stereo.getReadPointer (ch), n, fx.getSpaceSend());
+            if (sendBus != nullptr)
+            {
+                if (done + n <= sendBus->getNumSamples())
+                    sendBus->addFrom (ch, done, stereo, ch, 0, n, fx.getSpaceSend());
+            }
+            else
+            {
+                SpaceReverb::addToBus (ch, done, stereo.getReadPointer (ch), n, fx.getSpaceSend());
+            }
 
         done += n;
     }

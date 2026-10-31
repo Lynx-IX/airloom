@@ -19,10 +19,11 @@ public:
 
     // 'in' holds the interface's inputs (numInputs of them) starting at sample 0.
     // When armed, the input is also added to 'recordBus' (from sample 0), with or
-    // without its effects, before the fader.
+    // without its effects, before the fader. Its Space send goes to 'sendBus' (its live
+    // group's, from sample 0) when given, else straight to the shared reverb.
     void process (const juce::AudioBuffer<float>& in, int numInputs,
                   juce::AudioBuffer<float>& out, int startSample, int numSamples,
-                  juce::AudioBuffer<float>& recordBus);
+                  juce::AudioBuffer<float>& recordBus, juce::AudioBuffer<float>* sendBus = nullptr);
 
     void setGain (float linearGain)   { targetGain = linearGain; }
     void setMuted (bool shouldMute)   { muted = shouldMute; }

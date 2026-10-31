@@ -30,6 +30,29 @@ public:
     }
 };
 
+// MUTE: on, it reads MUTED on a grey key rather than red (red is kept for recording and
+// emergencies); the strip it belongs to fades back (see ChannelStrip::isMutedShown).
+class MuteButton : public RightClickable<juce::TextButton>
+{
+public:
+    MuteButton() : RightClickable<juce::TextButton> ("MUTE") {}
+    std::function<void (bool)> onShownChanged;
+
+    void buttonStateChanged() override
+    {
+        RightClickable<juce::TextButton>::buttonStateChanged();
+        if (const bool on = getToggleState(); on != shown)
+        {
+            shown = on;
+            setButtonText (on ? "MUTED" : "MUTE");
+            if (onShownChanged) onShownChanged (on);
+        }
+    }
+
+private:
+    bool shown = false;
+};
+
 // One mixer column: title, current/next file, fader, meter and mute.
 class ChannelStrip : public juce::Component
 {
@@ -46,7 +69,16 @@ public:
         addAndMakeVisible (fader);
 
         muteButton.setClickingTogglesState (true);
-        muteButton.setColour (juce::TextButton::buttonOnColourId, Theme::danger);
+        muteButton.setColour (juce::TextButton::buttonOnColourId, Theme::panelEdge);
+        muteButton.setColour (juce::TextButton::textColourOnId, Theme::text);
+        muteButton.onShownChanged = [this] (bool muted)
+        {
+            // Muted: the fader and meter fade back, and whatever holds this strip repaints its own fade.
+            fader.setAlpha (muted ? 0.4f : 1.0f);
+            meter.setAlpha (muted ? 0.4f : 1.0f);
+            if (auto* parent = getParentComponent())
+                parent->repaint();
+        };
         addAndMakeVisible (muteButton);
 
         addAndMakeVisible (meter);
@@ -165,7 +197,9 @@ public:
     }
 
     RightClickable<juce::Slider> fader;
-    RightClickable<juce::TextButton> muteButton { "MUTE" };
+    MuteButton muteButton;
+
+    bool isMutedShown() const   { return muteButton.getToggleState(); }
     juce::TextButton fileButton;
     LevelMeter meter;
 

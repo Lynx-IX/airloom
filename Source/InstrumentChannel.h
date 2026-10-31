@@ -93,6 +93,23 @@ struct PadLayout
     {
         return juce::String (noteNames[root % 12]) + " " + scaleNames[juce::jlimit (0, numScales - 1, scale)];
     }
+
+    // A key button's label: "A min" and "Bb maj" for the pentatonics, "A minor", "D dorian" for the rest.
+    static juce::String shortName (int root, int scale)
+    {
+        static const char* const shortScales[numScales] = { "min", "maj", "minor", "major", "dorian", "hijaz", "chrom" };
+        return juce::String (noteNames[juce::jlimit (0, 11, root)]) + " " + shortScales[juce::jlimit (0, numScales - 1, scale)];
+    }
+
+    // Every note: the chromatic layout from C (rows a fourth apart), for instruments in no key in particular.
+    static PadLayout anyKey (int octave)
+    {
+        PadLayout l;
+        l.root = 0;
+        l.scale = numScales - 1;
+        l.octave = octave;
+        return l;
+    }
 };
 
 // A hosted instrument plugin: its MIDI comes in from controllers (the Fire's
@@ -110,7 +127,14 @@ public:
     void prepare (double sampleRate, int blockSize);
     void release();
 
-    void process (juce::AudioBuffer<float>& out, int startSample, int numSamples, juce::AudioBuffer<float>& recordBus);
+    // Its Space send goes to 'sendBus' (its live group's, from sample 0) when given, else straight to the shared reverb.
+    // 'silencedAfter': nothing after it can be heard (its group is muted and faded out). Then, as when the
+    // instrument itself is muted and faded out, the plug-in rests to save CPU - unless it's armed to record.
+    void process (juce::AudioBuffer<float>& out, int startSample, int numSamples, juce::AudioBuffer<float>& recordBus,
+                  juce::AudioBuffer<float>* sendBus = nullptr, bool silencedAfter = false);
+
+    // True while the plug-in is resting (muted, not armed).
+    bool isResting() const   { return resting.load(); }
 
     // Installs a plugin (prepared here for the current device), returning the old one.
     std::unique_ptr<juce::AudioPluginInstance> setPlugin (std::unique_ptr<juce::AudioPluginInstance> newPlugin);
@@ -197,6 +221,7 @@ private:
     juce::SmoothedValue<float> gain;
     std::atomic<float> targetGain { 1.0f };
     std::atomic<bool> muted { false }, armed { false }, recordWithFx { true };
+    std::atomic<bool> resting { false };   // audio thread writes: the plug-in isn't being run
     std::atomic<float> peakL { 0.0f }, peakR { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InstrumentChannel)

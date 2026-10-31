@@ -13,7 +13,7 @@ void InputChannel::prepare (double newSampleRate, int maxBlockSize)
 
 void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
                             juce::AudioBuffer<float>& out, int startSample, int numSamples,
-                            juce::AudioBuffer<float>& recordBus)
+                            juce::AudioBuffer<float>& recordBus, juce::AudioBuffer<float>* sendBus)
 {
     numSamples = juce::jmin (numSamples, scratch.getNumSamples(), in.getNumSamples());
 
@@ -88,5 +88,8 @@ void InputChannel::process (const juce::AudioBuffer<float>& in, int numInputs,
     for (int ch = 0; ch < juce::jmin (2, out.getNumChannels()); ++ch)
         out.addFrom (ch, startSample, scratch, ch, 0, numSamples);
     for (int ch = 0; ch < 2; ++ch)
-        SpaceReverb::addToBus (ch, 0, scratch.getReadPointer (ch), numSamples, fx.getSpaceSend());
+        if (sendBus != nullptr)
+            sendBus->addFrom (ch, 0, scratch, ch, 0, juce::jmin (numSamples, sendBus->getNumSamples()), fx.getSpaceSend());
+        else
+            SpaceReverb::addToBus (ch, 0, scratch.getReadPointer (ch), numSamples, fx.getSpaceSend());
 }

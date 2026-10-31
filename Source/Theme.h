@@ -11,17 +11,23 @@ namespace Theme
     {
         const char* name;
         juce::uint32 background, panel, raised, panelEdge, text, textDim, accent, warn, danger;
-        float groupBrightness;   // group colours are scaled by this (dimmer for Night)
+
+        // The theme's take on the 16 group colours: each blended a little towards a tint, then
+        // its saturation and brightness scaled. Every colour keeps its own hue, so a group's
+        // colour is recognisably the same in every theme and they stay distinct from each other.
+        juce::uint32 groupTint;
+        float tintAmount, groupSaturation, groupBrightness;
     };
 
     constexpr int numPalettes = 6;
     inline const Palette palettes[numPalettes] {
-        { "Graphite",      0xff0b0c0f, 0xff15171c, 0xff1d2027, 0xff2c3039, 0xffeceef2, 0xff8d93a0, 0xff4fd1b5, 0xfff2b54e, 0xffff5d5d, 1.0f },
-        { "Midnight",      0xff0a0d16, 0xff121828, 0xff1a2236, 0xff2a3550, 0xffe8eefa, 0xff8794b0, 0xff6cb6ff, 0xfff2b54e, 0xffff6070, 1.0f },
-        { "Ember",         0xff100b09, 0xff1b1411, 0xff241b17, 0xff3a2c25, 0xfff4ebe4, 0xffa39283, 0xffe9915e, 0xfff5cf57, 0xffff5d5d, 1.0f },
-        { "Forest",        0xff090d0b, 0xff121a16, 0xff19231e, 0xff293a31, 0xffe9f2ec, 0xff8a9d91, 0xff7fd18b, 0xfff2b54e, 0xffff6b5d, 1.0f },
-        { "Night",         0xff050506, 0xff0c0d10, 0xff131519, 0xff1f2228, 0xffb9bdc6, 0xff6b707b, 0xff3c9f8a, 0xffc28f3e, 0xffcc4a4a, 0.72f },
-        { "High contrast", 0xff020202, 0xff0e0e0e, 0xff1e1e1e, 0xff4c4c4c, 0xfffdfdfd, 0xffc8c8c8, 0xff3dffd2, 0xffffc233, 0xffff4545, 1.12f },
+        //                  background  panel       raised      edge        text        textDim     accent      warn        danger      group tint  amount sat    bright
+        { "Graphite",      0xff0b0c0f, 0xff121418, 0xff1a1d23, 0xff2c3039, 0xffeceef2, 0xff8d93a0, 0xff4fd1b5, 0xfff2b54e, 0xffff5d5d, 0xff000000, 0.0f,  1.0f,  1.0f },
+        { "Midnight",      0xff0a0d16, 0xff101523, 0xff181f31, 0xff2a3550, 0xffe8eefa, 0xff8794b0, 0xff6cb6ff, 0xfff2b54e, 0xffff6070, 0xff7f9cff, 0.22f, 0.9f,  1.0f },
+        { "Ember",         0xff100b09, 0xff18110f, 0xff211915, 0xff3a2c25, 0xfff4ebe4, 0xffa39283, 0xffe9915e, 0xfff5cf57, 0xffff5d5d, 0xfff0a060, 0.2f,  0.95f, 0.98f },
+        { "Forest",        0xff090d0b, 0xff0f1613, 0xff17201b, 0xff293a31, 0xffe9f2ec, 0xff8a9d91, 0xff7fd18b, 0xfff2b54e, 0xffff6b5d, 0xff9cc48a, 0.18f, 0.9f,  0.96f },
+        { "Night",         0xff050506, 0xff0a0b0d, 0xff111316, 0xff1f2228, 0xffb9bdc6, 0xff6b707b, 0xff3c9f8a, 0xffc28f3e, 0xffcc4a4a, 0xff000000, 0.0f,  0.85f, 0.72f },
+        { "High contrast", 0xff020202, 0xff0a0a0a, 0xff1a1a1a, 0xff4c4c4c, 0xfffdfdfd, 0xffc8c8c8, 0xff3dffd2, 0xffffc233, 0xffff4545, 0xff000000, 0.0f,  1.12f, 1.12f },
     };
 
     inline int currentPalette = 0;
@@ -37,7 +43,8 @@ namespace Theme
     inline juce::Colour danger      { palettes[0].danger };   // red: clipping / armed
 
     // Group colours: soft, distinct hues that stay readable on the dark background.
-    constexpr int numRowColours = 8;
+    // The first eight are the originals (sets refer to them by number), then eight more.
+    constexpr int numRowColours = 16;
     inline const juce::Colour baseRowColours[numRowColours] {
         juce::Colour (0xff9d8cff),   // violet
         juce::Colour (0xffa6d160),   // green
@@ -47,10 +54,20 @@ namespace Theme
         juce::Colour (0xff4fd1c4),   // teal
         juce::Colour (0xfff08c5c),   // coral
         juce::Colour (0xffd2bd8c),   // sand
+        juce::Colour (0xffd9e85c),   // lime
+        juce::Colour (0xff8fd8ff),   // sky
+        juce::Colour (0xffd98ae8),   // orchid
+        juce::Colour (0xff7c86f5),   // indigo
+        juce::Colour (0xff86e8b6),   // mint
+        juce::Colour (0xffe85fd0),   // magenta
+        juce::Colour (0xffa7b6cb),   // slate
+        juce::Colour (0xffb2a65c),   // olive
     };
     inline juce::Colour rowColours[numRowColours] {
-        baseRowColours[0], baseRowColours[1], baseRowColours[2], baseRowColours[3],
-        baseRowColours[4], baseRowColours[5], baseRowColours[6], baseRowColours[7],
+        baseRowColours[0],  baseRowColours[1],  baseRowColours[2],  baseRowColours[3],
+        baseRowColours[4],  baseRowColours[5],  baseRowColours[6],  baseRowColours[7],
+        baseRowColours[8],  baseRowColours[9],  baseRowColours[10], baseRowColours[11],
+        baseRowColours[12], baseRowColours[13], baseRowColours[14], baseRowColours[15],
     };
 
     inline int paletteIndex (const juce::String& name)
@@ -86,12 +103,13 @@ namespace Theme
         danger = juce::Colour (p.danger);
 
         for (int i = 0; i < numRowColours; ++i)
-            rowColours[i] = p.groupBrightness > 1.0f
-                          ? baseRowColours[i].withMultipliedSaturation (p.groupBrightness).withMultipliedBrightness (p.groupBrightness)
-                          : baseRowColours[i].withMultipliedBrightness (p.groupBrightness);
+            rowColours[i] = baseRowColours[i].interpolatedWith (juce::Colour (p.groupTint), p.tintAmount)
+                                             .withMultipliedSaturation (p.groupSaturation)
+                                             .withMultipliedBrightness (p.groupBrightness);
     }
     inline const char* const rowColourNames[numRowColours] {
-        "Violet", "Green", "Blue", "Amber", "Rose", "Teal", "Coral", "Sand"
+        "Violet", "Green", "Blue", "Amber", "Rose", "Teal", "Coral", "Sand",
+        "Lime", "Sky", "Orchid", "Indigo", "Mint", "Magenta", "Slate", "Olive"
     };
 
     inline juce::Colour rowColour (int index)
@@ -107,27 +125,28 @@ namespace Theme
 
     // A surface with a soft top-lit gradient, a hairline highlight and a dark outline.
     inline void drawSurface (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour base, float corner,
-                             juce::Colour outline = juce::Colours::black.withAlpha (0.55f))
+                             juce::Colour outline = juce::Colours::black.withAlpha (0.4f))
     {
-        g.setGradientFill (juce::ColourGradient (base.brighter (0.06f), 0.0f, r.getY(),
-                                                 base.darker (0.10f), 0.0f, r.getBottom(), false));
+        g.setGradientFill (juce::ColourGradient (base.brighter (0.04f), 0.0f, r.getY(),
+                                                 base.darker (0.08f), 0.0f, r.getBottom(), false));
         g.fillRoundedRectangle (r, corner);
 
-        g.setColour (juce::Colours::white.withAlpha (0.05f));
+        g.setColour (juce::Colours::white.withAlpha (0.035f));
         g.drawHorizontalLine (juce::roundToInt (r.getY() + 1.0f), r.getX() + corner, r.getRight() - corner);
 
         g.setColour (outline);
         g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
     }
 
-    // A group's or strip's coloured spine on the left, with a faint glow into the panel.
+    // A group's coloured spine on the left: a thin rail with the faintest wash into the panel,
+    // so the colour names the group without lighting it up.
     inline void drawSpine (juce::Graphics& g, juce::Rectangle<float> bounds, juce::Colour colour)
     {
-        g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.16f), bounds.getX(), 0.0f,
-                                                 colour.withAlpha (0.0f), bounds.getX() + 60.0f, 0.0f, false));
-        g.fillRoundedRectangle (bounds.withWidth (60.0f), 6.0f);
-        g.setColour (colour);
-        g.fillRoundedRectangle (bounds.withWidth (4.0f).reduced (0.0f, 1.0f), 2.0f);
+        g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.07f), bounds.getX(), 0.0f,
+                                                 colour.withAlpha (0.0f), bounds.getX() + 40.0f, 0.0f, false));
+        g.fillRoundedRectangle (bounds.withWidth (40.0f), 6.0f);
+        g.setColour (colour.withAlpha (0.85f));
+        g.fillRoundedRectangle (bounds.withWidth (2.0f).reduced (0.0f, 6.0f), 1.0f);
     }
 
     // Draws a name as large as it can be (up to maxSize) while fitting the area on up
@@ -189,7 +208,7 @@ namespace Theme
             setColour (juce::ResizableWindow::backgroundColourId, background);
             setColour (juce::TextButton::buttonColourId, raised);
             setColour (juce::TextButton::buttonOnColourId, accent);
-            setColour (juce::TextButton::textColourOffId, text);
+            setColour (juce::TextButton::textColourOffId, text.interpolatedWith (textDim, 0.45f));   // quiet until on
             setColour (juce::TextButton::textColourOnId, background);
             setColour (juce::Slider::thumbColourId, text);
             setColour (juce::Slider::trackColourId, accent);

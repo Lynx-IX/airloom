@@ -81,6 +81,19 @@ public:
         return juce::jlimit (-60.0, 6.0, db);
     }
 
+    // Moves several levels by the same dB, set by the loudest, so their balance holds. Levels
+    // may sit below off (-60): one held at off comes back at its old distance on the way up.
+    // The loudest stops at +6 and at off. Show each as jlimit (-60, 6, level).
+    static void nudgeTogether (std::vector<double>& levels, int steps)
+    {
+        if (levels.empty())
+            return;
+        const double loudest = juce::jmax (-60.0, *std::max_element (levels.begin(), levels.end()));
+        const double change = nudgeDb (loudest, steps) - loudest;
+        for (auto& l : levels)
+            l += change;
+    }
+
 private:
     std::map<juce::String, MidiBinding> bindings;
 };

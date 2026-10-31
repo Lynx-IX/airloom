@@ -23,6 +23,32 @@ LoopClipPtr makeSeamlessLoop (const LoopClipPtr& source, double crossfadeSeconds
 // A copy of the clip playing backwards.
 std::shared_ptr<LoopClip> makeReversed (const LoopClip& source);
 
+// How a channel trims and shapes its sample, in playback order (if the channel plays reversed,
+// the start is where it starts playing). Never written into the file.
+struct SampleShape
+{
+    double start = 0.0, end = 0.0;           // seconds; end 0 = to the end of the sample
+    double fadeIn = 0.0, fadeOut = 0.0;      // seconds
+    double gainDb = 0.0;
+
+    bool isSet() const   { return start > 0.0 || end > 0.0 || fadeIn > 0.0 || fadeOut > 0.0 || gainDb != 0.0; }
+    bool operator== (const SampleShape& o) const
+    {
+        return start == o.start && end == o.end && fadeIn == o.fadeIn && fadeOut == o.fadeOut && gainDb == o.gainDb;
+    }
+
+    // Part of a cached clip's key, so each shape is its own version.
+    juce::String key() const
+    {
+        return isSet() ? "|shape" + juce::String (start, 4) + "," + juce::String (end, 4) + "," + juce::String (fadeIn, 4)
+                           + "," + juce::String (fadeOut, 4) + "," + juce::String (gainDb, 2)
+                       : juce::String();
+    }
+};
+
+// The clip trimmed to the shape's start and end, with its gain and smooth (cosine) fades.
+std::shared_ptr<LoopClip> makeShaped (const LoopClip& source, const SampleShape& shape);
+
 // The first point on a grid (every 'unit' samples from 'origin') at or after 'now'. A grid
 // point passed less than 'grace' samples ago counts, so a slightly late press isn't pushed
 // back a whole beat.

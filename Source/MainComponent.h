@@ -6,6 +6,9 @@
 #include "InputChannel.h"
 #include "BeatIndicator.h"
 #include "InputsView.h"
+#include "LiveGroupBus.h"
+#include "LiveGroupView.h"
+#include "SampleEditor.h"
 #include "LooperBar.h"
 #include "InstrumentChannel.h"
 #include "LiveSet.h"
@@ -107,7 +110,7 @@ private:
     // fader and mute (what's heard glides from fromGain to toGain; 0 = muted).
     struct SceneGlide
     {
-        enum class Kind { channel, group, input, instrument } kind;
+        enum class Kind { channel, group, liveGroup, input, instrument } kind;
         juce::String uid;        // channel or group
         int index;               // group row, input or instrument
         double fromDb, toDb;     // the fader
@@ -115,6 +118,17 @@ private:
         bool endMuted;
     };
     std::vector<SceneGlide> sceneGlides;
+
+    // A scene's effects, morphing from what's on now to what the scene keeps.
+    struct SceneFxGlide
+    {
+        enum class Kind { channel, group, liveGroup, input, instrument } kind;
+        juce::String uid;   // channel, group or live group
+        int index;          // input or instrument
+        FxSettings from, to;
+    };
+    std::vector<SceneFxGlide> sceneFxGlides;
+    void applyFxGlide (const SceneFxGlide& g, const FxSettings& fx, bool done);
     double morphStartMs = 0.0, morphMs = 0.0;
     LiveSet::Scene captureScene (const juce::String& name) const;
     void addScene();
@@ -129,6 +143,21 @@ private:
     void showSetMenu();
     void newSet();
     void openSet();
+    void openSetFile (const juce::File& file);
+
+    // Keeping work safe: a saved set's file is rewritten a moment after any change (with dated
+    // backups beside it); leaving an untitled set that has something in it asks first.
+    void writeSetFile();                                  // now, if there are unsaved changes
+    void backUpSetFile();
+    bool setHasContent() const;
+    void confirmLeavingSet (std::function<void()> then);  // runs 'then' once it's safe to replace the set
+    void renameSet();
+    void addRecentSet (const juce::File& file);
+    juce::StringArray recentSets();
+    bool setFileDirty = false;
+    juce::uint32 lastChangeMs = 0, lastBackupMs = 0;
+    static constexpr juce::uint32 autosaveDelayMs = 1500, backupEveryMs = 10 * 60 * 1000;
+    static constexpr int backupsKept = 20;
     void saveSet (bool asNewFolder);
     void saveSetTo (const juce::File& folder, bool moveFiles);
     void exportPack();
@@ -139,6 +168,33 @@ private:
 
     // Rows and channels
     void rebuildRows();
+
+    // Live groups: inputs and instruments in groups with their own fader, mute and effects.
+    void rebuildLiveGroups();
+    void updateLiveGroupViews();
+    void applyLiveRouting();
+    int liveGroupIndex (const juce::String& uid) const;
+    int liveGroupSize (int g) const;
+    void showLiveGroupMenu (int g);
+    void showAddGroupMenu();
+    void addLiveGroup (bool instruments);
+    void removeLiveGroup (int g);
+    void setLiveGroupMuted (int g, bool muted);
+    void moveStripToGroup (bool instrument, int i, const juce::String& uid);
+    void addMoveToGroupMenu (juce::PopupMenu& m, const juce::String& currentUid);
+    juce::Colour liveGroupColour (const juce::String& uid) const;
+    std::vector<std::pair<bool, int>> liveMembers (int g) const;   // (is an instrument, index), in strip order
+    void toggleLiveCollapsed (int g);
+    void moveLiveStrip (bool instrument, int i, int toGroup, int insertAt);
+    LiveGroupView* liveGroupViewAt (juce::Point<int> pos);
+    int freshColour() const;   // the group colour used least so far
+
+    // Keys: an instrument in Any key plays every note on the Fire; the set's key buttons pick one.
+    PadLayout layoutFor (int instrument) const;
+    juce::StringArray keyButtonLabels() const;
+    int activeKeyButton (int instrument) const;
+    void refreshKeyButtons();   // the set's key buttons changed: every strip shows the new row
+    static constexpr int maxKeyButtons = 5;
     void layoutRows();
     void updateRowViews();
     void addRow (std::function<void (int)> then = {});
@@ -146,18 +202,25 @@ private:
     void setTheme (int index);
     void shiftFireOctave (const juce::String& fireName, int direction);
     void nudgeFireVolume (const juce::String& fireName, int steps);
+    struct KnobLevel { double tracked = 0.0, shown = 1000.0; };   // tracked can go below off (-60)
+    std::map<juce::String, KnobLevel> knobLevels;
+    int runawaysSeen = 0;   // FxChain::runaways already reported                 // the Fire VOLUME knob's, per instrument
     static constexpr int minPadOctave = 1, maxPadOctave = 6;   // the bottom-left pad's octave
     void toggleCollapsed (int row);
     void setAllCollapsed (bool collapse);
     void removeRow (int row);
     void addChannel (int row);
     void showChannelMenu (int row, int slot);
+    void showSampleEditor (int row, int slot);
+    void applySampleShape (int slotId, const SampleShape& shape);
     void removeChannel (int row, int slot);
     void moveChannel (int row, int slot, int delta);
     void moveChannelTo (int slotId, int targetRow, int targetIndex);
     RowView* rowViewAt (juce::Point<int> pos);
     juce::Component* groupViewAt (juce::Point<int> pos);
-    std::map<int, juce::Rectangle<int>> arrangeGroups (int moving = -2, juce::Point<int> movingTo = {}) const;
+    static constexpr int noGroup = std::numeric_limits<int>::min();   // not a row (>= 0) or live group (< 0)
+    std::map<int, juce::Rectangle<int>> arrangeGroups (int moving = noGroup, juce::Point<int> movingTo = {},
+                                                       std::map<int, juce::Point<int>>* wants = nullptr) const;
     juce::Point<int> droppedGroupPosition (const SourceDetails& details, int& item) const;
     void clearDropMarkers();
     void assignToChannels (int row, int firstSlot, const juce::Array<juce::File>& files);
@@ -169,7 +232,7 @@ private:
     // Live inputs and effects
     void setupInputs();
     void setupInputStrip (int input, SourceStrip& strip);
-    void addInput();
+    void addInput (const juce::String& groupUid = {});
     void removeInput (int input);
     void openAllInputChannels();
     juce::String inputsOpenedFor;   // the device openAllInputChannels() last tried
@@ -205,7 +268,7 @@ private:
     // Hosted instruments
     void updateSourceStrips();
     void setupInstrumentStrip (int index, SourceStrip& strip);
-    void addInstrument();
+    void addInstrument (const juce::String& groupUid = {}, juce::Component* menuTarget = nullptr);
     void removeInstrument (int index);
     void showInstrumentMenu (int index);
     void loadInstrumentPlugin (int index, const juce::PluginDescription& description, const juce::String& state);
@@ -312,6 +375,10 @@ private:
 
     LiveSet liveSet;
     std::array<std::unique_ptr<LoopChannel>, LiveSet::maxRows> engines;
+    // Live groups' mixes, and which one each input and instrument plays into (read by the audio thread).
+    std::array<std::unique_ptr<LiveGroupBus>, LiveSet::maxLiveGroups> liveBuses;
+    std::array<std::atomic<int>, LiveSet::maxInputs> inputBus {};
+    std::array<std::atomic<int>, LiveSet::maxInstruments> instrumentBus {};
     std::array<std::unique_ptr<InputChannel>, LiveSet::maxInputs> inputEngines;
     std::atomic<int> activeInputs { 0 };   // how many of them the audio thread runs
     int inputGeneration = 0;               // discards input plug-in loads meant for an earlier set or layout
@@ -350,7 +417,18 @@ private:
     void updateFireLightShow();
     std::vector<FireOutput> fireOutputs;
     juce::AudioBuffer<float> inputCapture;   // audio thread: the interface inputs for this block
-    juce::AudioBuffer<float> recordBus;      // audio thread: armed inputs for the looper
+    juce::AudioBuffer<float> recordBus;      // audio thread: armed sources for the looper, two channels per track
+    juce::AudioBuffer<float> recordDiscard;  // audio thread: where a source armed mid-take goes (not recorded)
+
+    // Recording several armed sources at once: each on its own track (and channel). The track each
+    // input and instrument records into (-1: none); all 0 outside a recording, so overdubs hear them all.
+    static constexpr int maxRecordTracks = LiveSet::maxInputs + LiveSet::maxInstruments;
+    std::array<std::atomic<int>, LiveSet::maxInputs> inputTrack {};
+    std::array<std::atomic<int>, LiveSet::maxInstruments> instrumentTrack {};
+    struct RecordSource { bool instrument; int index; juce::String name, key; };
+    std::vector<RecordSource> recordSources;   // message thread: who's on which track of the take
+    void routeAllArmedToTrackZero();
+    juce::String nextLoopLabelFor (const Row& row, const juce::String& base) const;
     std::atomic<int> deviceInputs { 0 };
     std::atomic<int> roundTripLatency { 0 };
     std::atomic<double> currentSampleRate { 48000.0 };
@@ -404,6 +482,7 @@ private:
     InputsView inputsView;
     LooperBar looperBar;
     juce::OwnedArray<RowView> rowViews;
+    juce::OwnedArray<LiveGroupView> liveGroupViews;
     juce::TextButton addRowButton { "+ GROUP" };
     ChannelStrip masterStrip { "Master", false };
     RightClickable<juce::TextButton> stopAllButton { "STOP ALL" };
@@ -446,6 +525,7 @@ private:
     // Beats since the reference point: REC while recording, otherwise the last TAP.
     double currentBeatPosition (bool& recording) const;
     juce::Rectangle<int> headerArea, messageArea;
+    std::vector<int> transportDividers;   // x of the thin lines between the bottom bar's sections
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     juce::String deviceStatus, midiStatus, errorMessage, infoMessage;

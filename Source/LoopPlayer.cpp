@@ -72,6 +72,38 @@ std::shared_ptr<LoopClip> makeReversed (const LoopClip& source)
     return clip;
 }
 
+std::shared_ptr<LoopClip> makeShaped (const LoopClip& source, const SampleShape& shape)
+{
+    const int length = source.data.getNumSamples();
+    const double sr = source.sampleRate;
+    const int from = juce::jlimit (0, juce::jmax (0, length - 1), (int) std::lround (shape.start * sr));
+    const int to = shape.end > 0.0 ? juce::jlimit (from + 1, juce::jmax (from + 1, length), (int) std::lround (shape.end * sr)) : length;
+    const int n = juce::jmax (1, to - from);
+
+    auto clip = std::make_shared<LoopClip>();
+    clip->sampleRate = sr;
+    clip->file = source.file;
+    clip->data.setSize (source.data.getNumChannels(), n);
+    clip->data.clear();
+    for (int ch = 0; ch < source.data.getNumChannels(); ++ch)
+        clip->data.copyFrom (ch, 0, source.data, ch, from, juce::jmin (n, length - from));
+
+    clip->data.applyGain (juce::Decibels::decibelsToGain ((float) shape.gainDb));
+
+    // Smooth (raised-cosine) fades: no click at either end, and no sudden bend in the level.
+    const int fadeIn = juce::jlimit (0, n, (int) std::lround (shape.fadeIn * sr));
+    const int fadeOut = juce::jlimit (0, n - fadeIn, (int) std::lround (shape.fadeOut * sr));
+    for (int ch = 0; ch < clip->data.getNumChannels(); ++ch)
+    {
+        auto* d = clip->data.getWritePointer (ch);
+        for (int i = 0; i < fadeIn; ++i)
+            d[i] *= 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * (float) i / (float) fadeIn);
+        for (int i = 0; i < fadeOut; ++i)
+            d[n - 1 - i] *= 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * (float) i / (float) fadeOut);
+    }
+    return clip;
+}
+
 //==============================================================================
 void LoopPlayer::prepare (double deviceSampleRate)
 {

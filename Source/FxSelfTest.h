@@ -14,9 +14,50 @@
 #include "PresetName.h"
 #include "FireVisualizer.h"
 #include "RowView.h"
+#include "LiveGroupView.h"
+#include "LiveGroupBus.h"
+#include "GroupLayout.h"
+#include "SampleEditor.h"
+#include "SamplePool.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
+// A stand-in instrument for the tests: a steady tone, counting how often it's run and
+// noting the MIDI it was sent.
+class TestInstrument : public juce::AudioPluginInstance
+{
+public:
+    int blocksRun = 0;
+    bool sawAllNotesOff = false;
+
+    const juce::String getName() const override                            { return "Test instrument"; }
+    void prepareToPlay (double, int) override                              {}
+    void releaseResources() override                                       {}
+    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override
+    {
+        ++blocksRun;
+        for (const auto meta : midi)
+            sawAllNotesOff |= meta.getMessage().isAllNotesOff();
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            juce::FloatVectorOperations::fill (buffer.getWritePointer (ch), 0.25f, buffer.getNumSamples());
+    }
+    double getTailLengthSeconds() const override                           { return 0.0; }
+    bool acceptsMidi() const override                                      { return true; }
+    bool producesMidi() const override                                     { return false; }
+    juce::AudioProcessorEditor* createEditor() override                    { return nullptr; }
+    bool hasEditor() const override                                        { return false; }
+    int getNumPrograms() override                                          { return 1; }
+    int getCurrentProgram() override                                       { return 0; }
+    void setCurrentProgram (int) override                                  {}
+    const juce::String getProgramName (int) override                       { return {}; }
+    void changeProgramName (int, const juce::String&) override             {}
+    void getStateInformation (juce::MemoryBlock&) override                 {}
+    void setStateInformation (const void*, int) override                   {}
+    void fillInPluginDescription (juce::PluginDescription& d) const override { d.name = getName(); d.isInstrument = true; }
+
+    TestInstrument() : AudioPluginInstance (BusesProperties().withOutput ("Out", juce::AudioChannelSet::stereo())) {}
+};
+
 namespace FxSelfTest
 {
     inline juce::String run()
@@ -831,6 +872,25 @@ namespace FxSelfTest
             for (int b = 0; b < 60; ++b) { out.clear(); row.process (out, 0, block); if (b > 40) tail = juce::jmax (tail, out.getRMSLevel (0, 0, block)); }
             check (tail > 0.001f, "Channel reverb tail rings out after the channel stops (" + juce::String (juce::Decibels::gainToDecibels (tail), 1) + " dB)");
 
+            // The channel fader comes after its effects: pulling it down silences the ringing tail too.
+            row.setOwnerGain (7, 0.0f);
+            float afterFader = 1.0f;
+            for (int b = 0; b < 20; ++b) { out.clear(); row.process (out, 0, block); afterFader = out.getRMSLevel (0, 0, block); }
+            row.setOwnerGain (7, 0.5f);
+            float back = 0.0f;
+            for (int b = 0; b < 20; ++b) { out.clear(); row.process (out, 0, block); back = out.getRMSLevel (0, 0, block); }
+            check (afterFader < 1.0e-6f && back > 1.0e-5f,
+                   "A channel's fader comes after its effects: down silences the reverb tail, up brings it back");
+
+            // The fader still sets the level going into nothing else: a channel without effects follows it as before.
+            const float halfVolume = levelOf ([&] (LoopChannel& r) { r.startLoop (1, tone, 0.0, 0.5f, 0); });
+            const float fullVolume = levelOf ([&] (LoopChannel& r) { r.startLoop (1, tone, 0.0, 1.0f, 0); });
+            FxSettings flat;
+            flat.gainDb = 0.001;   // "on" but doing nothing
+            const float halfThroughFx = levelOf ([&] (LoopChannel& r) { r.setOwnerFx (1, flat); r.startLoop (1, tone, 0.0, 0.5f, 0); });
+            check (std::abs (halfVolume / fullVolume - 0.5f) < 0.02f && std::abs (halfThroughFx / fullVolume - 0.5f) < 0.02f,
+                   "Channel volume gives the same level with or without its own effects");
+
             // A loop waiting for its beat says so - to start, then to stop - and not once it's happened.
             LoopChannel cued;
             cued.prepare (sr, block);
@@ -931,6 +991,67 @@ namespace FxSelfTest
                    + juce::String (muted, 3) + "), the input itself with MONITOR off (" + juce::String (unmonitored, 3) + ")");
         }
 
+        // ---- A long channel reverb dies away (the settings Hawk Screech had when it kept rumbling) ----
+        {
+            FxSettings s;
+            s.reverbOn = true;
+            s.reverbDecay = 8.8;
+            s.reverbDry = 0.84;
+            FxChain chain;
+            chain.prepare (44100.0, 512);
+            chain.setSettings (s);
+            juce::AudioBuffer<float> block (2, 512);
+            float lastSecond = 0.0f, peakAt10 = 0.0f;
+            for (int b = 0; b < (int) (44100.0 * 40.0 / 512.0); ++b)
+            {
+                block.clear();
+                if (b < 40)   // about half a second of loud noise
+                    for (int ch = 0; ch < 2; ++ch)
+                        for (int i = 0; i < 512; ++i)
+                            block.setSample (ch, i, juce::Random::getSystemRandom().nextFloat() * 1.6f - 0.8f);
+                chain.process (block, 0, 512);
+                const float p = block.getMagnitude (0, 512);
+                if (b == (int) (44100.0 * 10.0 / 512.0)) peakAt10 = p;
+                if (b > (int) (44100.0 * 39.0 / 512.0)) lastSecond = juce::jmax (lastSecond, p);
+            }
+            check (lastSecond < 0.0001f && std::isfinite (lastSecond),
+                   "An 8.8 s channel reverb dies away (after 10 s " + juce::String (juce::Decibels::gainToDecibels (peakAt10), 1)
+                   + " dB, after 40 s " + juce::String (juce::Decibels::gainToDecibels (lastSecond), 1) + " dB)");
+        }
+
+        // ---- Runaway guard and clearing: a wild value is caught and the tails emptied ----
+        {
+            FxSettings s;
+            s.reverbOn = true;
+            s.reverbDecay = 20.0;
+            FxChain chain;
+            chain.prepare (44100.0, 512);
+            chain.setSettings (s);
+            juce::AudioBuffer<float> block (2, 512);
+
+            const int before = FxChain::runaways.load();
+            block.clear();
+            block.setSample (0, 5, 1.0e30f);   // garbage, as if read from bad memory
+            chain.process (block, 0, 512);
+            float after = 0.0f;
+            for (int b = 0; b < 20; ++b)
+            {
+                block.clear();
+                chain.process (block, 0, 512);
+                after = juce::jmax (after, block.getMagnitude (0, 512));
+            }
+            check (FxChain::runaways.load() == before + 1 && after == 0.0f,
+                   "A runaway value in an effect is caught: the chain is emptied, not left ringing");
+
+            block.clear();
+            block.setSample (0, 5, 0.9f);
+            chain.process (block, 0, 512);
+            chain.requestClear();
+            block.clear();
+            chain.process (block, 0, 512);
+            check (block.getMagnitude (0, 512) == 0.0f, "A channel effects slot handed to another channel starts with empty tails");
+        }
+
         // ---- The Fire's VOLUME knob: relative steps, moving every fader by the same dB ----
         {
             const bool steps = MidiMap::relativeSteps (1) == 1 && MidiMap::relativeSteps (3) == 3
@@ -941,6 +1062,15 @@ namespace FxSelfTest
                              && MidiMap::nudgeDb (-60.0, 5) == -50.0;
             check (steps && balanced && limits,
                    "Fire VOLUME knob: reads its turn direction, moves faders together keeping their balance, stops at +6 and off");
+
+            // All the way down and back up: the quieter one waits below off and returns to its place.
+            std::vector<double> levels { -6.0, -20.0 };
+            for (int i = 0; i < 80; ++i) MidiMap::nudgeTogether (levels, -1);
+            const bool bothOff = levels[0] <= -60.0 && levels[1] <= -60.0;
+            for (int i = 0; i < 300 && levels[0] < -6.0; ++i) MidiMap::nudgeTogether (levels, 1);
+            check (bothOff && std::abs (levels[0] - -6.0) < 1.0e-9 && std::abs (levels[1] - -20.0) < 1.0e-9,
+                   "Fire VOLUME knob down to off and back keeps the balance (back to " + juce::String (levels[0], 1)
+                   + " / " + juce::String (levels[1], 1) + " dB)");
         }
 
         // ---- Freeze ----
@@ -1559,10 +1689,485 @@ namespace FxSelfTest
             }
             Theme::switchTo (0);
 
+            // Each theme's take on the 16 group colours, side by side.
+            {
+                const int sw = 72, sh = 22, labelW = 110;
+                juce::Image swatches (juce::Image::ARGB, labelW + 16 * sw, Theme::numPalettes * (sh + 6) + 6, true);
+                {
+                juce::Graphics g (swatches);
+                g.fillAll (juce::Colours::black);
+                for (int t = 0; t < Theme::numPalettes; ++t)
+                {
+                    Theme::applyPalette (t);
+                    const int y = 6 + t * (sh + 6);
+                    g.setColour (Theme::background);
+                    g.fillRect (0, y - 3, swatches.getWidth(), sh + 6);
+                    g.setColour (Theme::text);
+                    g.setFont (Theme::heading (12.0f));
+                    g.drawText (Theme::palettes[t].name, 6, y, labelW - 8, sh, juce::Justification::centredLeft);
+                    for (int c = 0; c < Theme::numRowColours; ++c)
+                    {
+                        g.setColour (Theme::rowColour (c));
+                        g.fillRoundedRectangle ((float) (labelW + c * sw + 2), (float) y, (float) sw - 4.0f, (float) sh, 4.0f);
+                        g.setColour (Theme::background);
+                        g.setFont (Theme::heading (10.0f));
+                        g.drawText (Theme::rowColourNames[c], labelW + c * sw, y, sw, sh, juce::Justification::centred);
+                    }
+                }
+                }   // the drawing finishes before the picture is saved
+                Theme::applyPalette (0);
+                const auto swatchFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-theme-colours.png");
+                swatchFile.deleteFile();
+                juce::FileOutputStream swatchOut (swatchFile);
+                juce::PNGImageFormat().writeImageToStream (swatches, swatchOut);
+            }
+
             const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-themes.png");
             file.deleteFile();
             juce::FileOutputStream out (file);
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (sheet, out), "Themes drawn to " + file.getFullPathName());
+        }
+
+        // ---- Live groups: inputs and instruments in groups with their own fader, mute and effects ----
+        {
+            // A set from before live groups: its inputs keep the old panel's place, the instruments get their own group.
+            LiveSet old;
+            old.inputs = LiveSet::defaultInputs();
+            old.instruments.push_back ({});
+            auto oldXml = old.toXml ({});
+            oldXml->deleteAllChildElementsWithTagName ("LiveGroups");
+            oldXml->setAttribute ("inputsX", 120);
+            oldXml->setAttribute ("inputsY", 40);
+            for (auto* e : oldXml->getChildWithTagNameIterator ("Input"))      e->removeAttribute ("group");
+            for (auto* e : oldXml->getChildWithTagNameIterator ("Instrument")) e->removeAttribute ("group");
+            LiveSet migrated;
+            migrated.loadFromXml (*oldXml, {});
+            const auto* ins = migrated.firstLiveGroup (false);
+            const auto* insts = migrated.firstLiveGroup (true);
+            check (migrated.liveGroups.size() == 2 && ins != nullptr && insts != nullptr
+                   && ins->position == juce::Point<int> (120, 40)
+                   && migrated.inputs[0].group == ins->uid && migrated.inputs[1].group == ins->uid
+                   && migrated.instruments[0].group == insts->uid,
+                   "An older set opens with its inputs in an Inputs group (same place) and instruments in their own group");
+
+            // Saved and opened again: groups, their mix and who is in them.
+            migrated.liveGroups[1].faderDb = -7.5;
+            migrated.liveGroups[1].muted = true;
+            migrated.liveGroups[1].fx.reverbOn = true;
+            LiveSet::LiveGroup synths;
+            synths.name = "Synths";
+            synths.instruments = true;
+            migrated.liveGroups.push_back (synths);
+            migrated.instruments[0].group = synths.uid;
+            migrated.inputs[0].order = 1;   // dragged after the second input
+            LiveSet reopened;
+            reopened.loadFromXml (*migrated.toXml ({}), {});
+            check (reopened.liveGroups.size() == 3 && reopened.liveGroups[1].faderDb == -7.5 && reopened.liveGroups[1].muted
+                   && reopened.liveGroups[1].fx.reverbOn && reopened.liveGroups[2].name == "Synths"
+                   && reopened.instruments[0].group == synths.uid && reopened.inputs[0].order == 1 && reopened.inputs[1].order == 0,
+                   "Live groups, their fader, mute and FX, and each strip's group and place in it, are saved with the set");
+
+            // The bus: fader and mute over everything in the group.
+            auto busLevel = [] (float faderGain, bool mute, double fxGainDb)
+            {
+                LiveGroupBus bus;
+                bus.setGain (faderGain);
+                bus.setMuted (mute);
+                FxSettings fx;
+                fx.gainDb = fxGainDb;
+                bus.getFx().setSettings (fx);
+                bus.prepare (48000.0, 512);
+                juce::AudioBuffer<float> out (2, 512);
+                float level = 0.0f;
+                for (int b = 0; b < 20; ++b)
+                {
+                    bus.begin (512);
+                    for (int ch = 0; ch < 2; ++ch)
+                        for (int i = 0; i < 512; ++i)
+                            bus.main.setSample (ch, i, 0.5f);
+                    out.clear();
+                    bus.finish (out, 0, 512);
+                    level = out.getSample (0, 511);
+                }
+                return level;
+            };
+            const float half = busLevel (0.5f, false, 0.0), muted = busLevel (1.0f, true, 0.0), quieter = busLevel (1.0f, false, -6.0);
+            check (std::abs (half - 0.25f) < 0.005f && muted == 0.0f && std::abs (quieter - 0.5f * juce::Decibels::decibelsToGain (-6.0f)) < 0.01f,
+                   "A live group's fader, mute and effects act on everything in it (" + juce::String (half, 3) + ", "
+                   + juce::String (muted, 3) + ", " + juce::String (quieter, 3) + ")");
+
+            // An input's Space send goes through its group (so the group's mute silences it too).
+            InputChannel mic;
+            mic.prepare (48000.0, 512);
+            mic.setMonitor (true);
+            FxSettings send;
+            send.spaceSend = 1.0;
+            mic.getFx().setSettings (send);
+            LiveGroupBus bus;
+            bus.prepare (48000.0, 512);
+            juce::AudioBuffer<float> in (2, 512), rec (2, 512);
+            for (int i = 0; i < 512; ++i) in.setSample (0, i, 0.3f);
+            in.copyFrom (1, 0, in, 0, 0, 512);
+            bus.begin (512);
+            rec.clear();
+            mic.process (in, 2, bus.main, 0, 512, rec, &bus.send);
+            check (bus.main.getMagnitude (0, 0, 512) > 0.1f && bus.send.getMagnitude (0, 0, 512) > 0.1f,
+                   "An input plays into its group, Space send included");
+
+            // The group on screen, with two strips.
+            LiveGroupView view;
+            SourceStrip mon ("MON", {}), edit ("EDIT", {});
+            mon.setContent ("Mic", "In 1", true, false, true, Theme::rowColour (4));
+            edit.setContent ("Flume Pad", "Vital", false, false, false, Theme::rowColour (4));
+            view.setStrips ({ &mon, &edit });
+            view.setContent ("Inputs", Theme::rowColour (4), true, false, false);
+            edit.strip.muteButton.setToggleState (true, juce::dontSendNotification);   // shows the muted look
+            const auto size = LiveGroupView::preferredSize (2, 1400);
+            view.setBounds (0, 0, size.x, size.y);
+            const auto image = view.createComponentSnapshot (view.getLocalBounds());
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-livegroup.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (image, out), "Live group drawn to " + file.getFullPathName());
+
+            // Collapsed: a short bar of tiles, the strips hidden, remembered in the set.
+            view.setTiles ({ { "Mic", true }, { "Flume Pad", false } });
+            view.setCollapsed (true);
+            const auto shut = LiveGroupView::preferredSize (2, 1400, 0, true);
+            view.setBounds (0, 0, shut.x, shut.y);
+            const auto shutImage = view.createComponentSnapshot (view.getLocalBounds());
+            LiveSet withCollapsed;
+            withCollapsed.ensureLiveGroups();
+            withCollapsed.liveGroups[0].collapsed = true;
+            LiveSet back;
+            back.loadFromXml (*withCollapsed.toXml ({}), {});
+            check (shut.y <= LiveGroupView::collapsedHeight && shut.x == size.x && ! mon.isVisible() && ! edit.isVisible()
+                   && view.strip.muteButton.isVisible() && ! view.strip.fader.isVisible() && back.liveGroups[0].collapsed,
+                   "Input and instrument groups collapse to a bar of tiles (MUTE stays), and stay collapsed in the set");
+
+            // The group colours, with the bar, for a look.
+            const int swatch = 26;
+            juce::Image sheet (juce::Image::ARGB, juce::jmax (shut.x, 8 * 120), shut.y + 2 * swatch + 16, true);
+            {
+                juce::Graphics g (sheet);
+                g.fillAll (Theme::background);
+                g.drawImageAt (shutImage, 0, 0);
+                for (int c = 0; c < Theme::numRowColours; ++c)
+                {
+                    const juce::Rectangle<int> r ((c % 8) * 120 + 4, shut.y + 8 + (c / 8) * swatch, 112, swatch - 4);
+                    g.setColour (Theme::rowColour (c));
+                    g.fillRoundedRectangle (r.toFloat(), 4.0f);
+                    g.setColour (Theme::background);
+                    g.setFont (Theme::heading (12.0f));
+                    g.drawText (Theme::rowColourNames[c], r, juce::Justification::centred);
+                }
+            }
+            const auto shutFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-livegroup-collapsed.png");
+            shutFile.deleteFile();
+            juce::FileOutputStream shutOut (shutFile);
+            check (Theme::numRowColours == 16 && shutOut.openedOk() && juce::PNGImageFormat().writeImageToStream (sheet, shutOut),
+                   "16 group colours, drawn with the collapsed group to " + shutFile.getFullPathName());
+            view.setStrips ({});
+        }
+
+        // ---- Group layout: free placement, overlaps push down, edge snapping ----
+        {
+            using G = GroupLayout::Group;
+            const juce::Point<int> box { 400, 300 };
+            auto at = [&] (std::vector<G> groups, int moving = std::numeric_limits<int>::min(), juce::Point<int> to = {})
+            {
+                return GroupLayout::arrange (std::move (groups), 1600, 8, moving, to);
+            };
+
+            auto free = at ({ { 0, { 0, 0 }, box }, { 1, { 420, 500 }, box } });
+            check (free[1].getPosition() == juce::Point<int> (420, 500),
+                   "A group stays where it's put - beside and below others, with space above it");
+
+            auto pushed = at ({ { 0, { 0, 0 }, box }, { 1, { 100, 100 }, box } });
+            check (pushed[0].getPosition() == juce::Point<int> (0, 0) && pushed[1].getPosition() == juce::Point<int> (100, 308),
+                   "A group overlapping one above it slides down just clear of it");
+
+            auto beside = at ({ { 0, { 0, 0 }, box }, { 1, { 408, 0 }, box } });
+            check (beside[1].getPosition() == juce::Point<int> (408, 0), "Groups side by side with tops lined up stay that way");
+
+            auto dropped = at ({ { 0, { 0, 0 }, box }, { 1, { 900, 0 }, box } }, 1, { 0, 0 });
+            check (dropped[1].getPosition() == juce::Point<int> (0, 0) && dropped[0].getPosition() == juce::Point<int> (0, 308),
+                   "A group dropped onto another takes its place and pushes it down");
+
+            auto added = at ({ { 0, { 0, 0 }, box }, { 1, { 500, 100 }, box }, { 2, { -1, -1 }, box } });
+            check (added[2].getPosition() == juce::Point<int> (0, 408), "A new group goes in along the bottom");
+
+            // A group n lines tall is exactly as tall as n one-line groups stacked, so they line up beside it.
+            const int oneRow = RowView::preferredSize (2, 1600, 2).y, threeRows = RowView::preferredSize (3, 1600, 1).y;
+            const int oneLive = LiveGroupView::preferredSize (1, 1600, 1).y, twoLive = LiveGroupView::preferredSize (2, 1600, 1).y;
+            check (threeRows == 3 * oneRow + 2 * GroupLayout::gap && twoLive == 2 * oneLive + GroupLayout::gap,
+                   "A group three channels tall is as tall as three one-line groups stacked (" + juce::String (threeRows) + " = 3 x "
+                   + juce::String (oneRow) + " + gaps)");
+
+            // Collapsing a group pulls up what's under it; expanding pushes it back.
+            const juce::Point<int> bar { 400, 60 };
+            auto shut = GroupLayout::arrangeCollapsed ({ { 0, { 0, 0 }, bar, box }, { 1, { 0, 308 }, box }, { 2, { 0, 616 }, box } }, 1600, 8);
+            auto open = GroupLayout::arrangeCollapsed ({ { 0, { 0, 0 }, box, box }, { 1, { 0, 308 }, box }, { 2, { 0, 616 }, box } }, 1600, 8);
+            check (shut[1].getY() == 68 && shut[2].getY() == 376 && open[1].getY() == 308 && open[2].getY() == 616,
+                   "Collapsing a group pulls the groups under it up; expanding it pushes them back");
+
+            // Under two groups side by side, it only comes up as far as the one still open allows.
+            auto half = GroupLayout::arrangeCollapsed ({ { 0, { 0, 0 }, bar, box }, { 1, { 408, 0 }, box },
+                                                         { 2, { 0, 308 }, { 816, 300 } } }, 1600, 8);
+            check (half[2].getY() == 308, "A group under an open and a collapsed group stays clear of the open one");
+
+            // Dropped below a collapsed group, it stays where it's dropped, and the kept position reproduces that.
+            std::map<int, juce::Point<int>> wants;
+            auto dropAt = GroupLayout::arrangeCollapsed ({ { 0, { 0, 0 }, bar, box }, { 1, { 900, 0 }, box } }, 1600, 8, 1, { 0, 500 }, &wants);
+            auto again = GroupLayout::arrangeCollapsed ({ { 0, { 0, 0 }, bar, box }, { 1, wants[1], box } }, 1600, 8);
+            check (dropAt[1].getY() == 500 && again[1].getY() == 500,
+                   "A group dropped under a collapsed one stays where it was dropped");
+
+            const juce::Array<juce::Rectangle<int>> others { juce::Rectangle<int> (0, 0, 400, 300) };
+            const auto besideSnap = GroupLayout::snap ({ 415, 13 }, box, others, 8);
+            const auto belowSnap = GroupLayout::snap ({ 10, 290 }, box, others, 8);
+            const auto farAway = GroupLayout::snap ({ 700, 650 }, box, others, 8);
+            check (besideSnap == juce::Point<int> (408, 0) && belowSnap == juce::Point<int> (0, 308) && farAway == juce::Point<int> (700, 650),
+                   "Dragged groups snap to a nearby edge (beside, below, tops and sides lined up) and stay put away from edges");
+        }
+
+        // ---- Muted instruments rest: their plug-in isn't run, saving CPU ----
+        {
+            InstrumentChannel inst;
+            inst.prepare (48000.0, 512);
+            auto owned = std::make_unique<TestInstrument>();
+            auto* test = owned.get();
+            inst.setPlugin (std::move (owned));
+            juce::AudioBuffer<float> out (2, 512), rec (2, 512);
+            auto run = [&] (int blocks, bool silencedAfter = false)
+            {
+                for (int b = 0; b < blocks; ++b) { out.clear(); rec.clear(); inst.process (out, 0, 512, rec, nullptr, silencedAfter); }
+            };
+
+            run (4);
+            const int playing = test->blocksRun;
+            inst.setMuted (true);
+            run (20);   // the mute fades out first
+            const int afterFade = test->blocksRun;
+            run (20);
+            const bool rests = inst.isResting() && test->blocksRun == afterFade && playing > 0 && out.getMagnitude (0, 512) == 0.0f;
+
+            inst.setArmed (true);
+            run (2);
+            const bool armedRuns = ! inst.isResting() && test->blocksRun > afterFade;
+            inst.setArmed (false);
+            run (20);
+
+            test->sawAllNotesOff = false;
+            inst.setMuted (false);
+            run (2);
+            const bool wakes = ! inst.isResting() && test->sawAllNotesOff;
+
+            run (4, true);
+            const bool groupMuted = inst.isResting();
+            run (1, false);
+
+            check (rests && armedRuns && wakes && groupMuted && ! inst.isResting(),
+                   "A muted instrument (or one in a muted group) rests once faded out, keeps running while armed, "
+                   "and wakes with all notes off");
+            inst.takePlugin();
+        }
+
+        // ---- Keys: Any key by default, key buttons belong to the set ----
+        {
+            check (LiveSet::Instrument().anyKey, "A new instrument plays in Any key");
+
+            // A set from before: instruments keep their key, and it gets the three flute key buttons.
+            LiveSet old;
+            old.instruments.push_back ({});
+            old.instruments[0].anyKey = false;
+            old.instruments[0].padRoot = 10;
+            auto oldXml = old.toXml ({});
+            oldXml->deleteAllChildElementsWithTagName ("KeyButtons");
+            for (auto* e : oldXml->getChildWithTagNameIterator ("Instrument")) e->removeAttribute ("anyKey");
+            LiveSet opened;
+            opened.loadFromXml (*oldXml, {});
+            check (! opened.instruments[0].anyKey && opened.instruments[0].padRoot == 10 && opened.keyButtons.size() == 3
+                   && PadLayout::shortName (opened.keyButtons[0].root, opened.keyButtons[0].scale) == "A min"
+                   && PadLayout::shortName (opened.keyButtons[1].root, opened.keyButtons[1].scale) == "Bb maj"
+                   && PadLayout::shortName (opened.keyButtons[2].root, opened.keyButtons[2].scale) == "E maj",
+                   "Older sets keep their instruments' keys and the A min / Bb maj / E maj buttons");
+
+            // A new set: no key buttons; what's set is saved, Any key in scenes included.
+            LiveSet fresh;
+            fresh.loadFromXml (*LiveSet::makeDefault().toXml ({}), {});
+            fresh.keyButtons.push_back ({ 2, 4 });
+            fresh.instruments.push_back ({});
+            LiveSet::Scene sc;
+            sc.keys.push_back ({ 0, 2, 4, 3, true });
+            fresh.scenes.push_back (sc);
+            LiveSet again;
+            again.loadFromXml (*fresh.toXml ({}), {});
+            check (LiveSet::makeDefault().keyButtons.empty() && again.keyButtons.size() == 1
+                   && PadLayout::shortName (again.keyButtons[0].root, again.keyButtons[0].scale) == "D dorian"
+                   && again.instruments[0].anyKey && again.scenes[0].keys[0].anyKey,
+                   "New sets start with no key buttons; buttons, Any key and scenes' Any key are saved");
+
+            // Any key: every note from C, rows a fourth apart, and no key name (loops aren't named after one).
+            const auto any = PadLayout::anyKey (3);
+            check (any.noteForPad (48) == 48 && any.noteForPad (49) == 49 && any.noteForPad (32) == 53 && any.keyName().isEmpty(),
+                   "Any key lays every note out on the Fire's pads from C");
+        }
+
+        // ---- Edit sample: trim, fades and gain, never written into the file ----
+        {
+            // Four seconds of a steady tone at 0.5.
+            LoopClip tone;
+            tone.sampleRate = 48000.0;
+            tone.data.setSize (2, 4 * 48000);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < tone.data.getNumSamples(); ++i)
+                    tone.data.setSample (ch, i, 0.5f * std::sin ((float) i * 0.05f + (i > 96000 ? 0.0f : 0.0f)) * (1.0f + 0.6f * std::sin ((float) i * 0.00008f)));
+
+            SampleShape shape;
+            shape.start = 1.0;
+            shape.end = 3.0;
+            shape.fadeIn = 0.5;
+            shape.fadeOut = 0.25;
+            shape.gainDb = 6.0;
+            const auto shaped = makeShaped (tone, shape);
+            const int n = shaped->data.getNumSamples();
+            const float middle = shaped->data.getMagnitude (0, 48000 - 200, 400);
+            const float original = tone.data.getMagnitude (0, 2 * 48000 - 200, 400);
+            check (n == 2 * 48000 && std::abs (shaped->data.getSample (0, 0)) < 1.0e-6f && std::abs (shaped->data.getSample (0, n - 1)) < 1.0e-3f
+                   && std::abs (middle / original - juce::Decibels::decibelsToGain (6.0f)) < 0.05f
+                   && tone.data.getNumSamples() == 4 * 48000,
+                   "Edit sample trims to 1-3 s, fades from and to silence, adds its gain, and leaves the sample itself alone");
+
+            check (shape.key() != SampleShape().key() && SampleShape().key().isEmpty() && ! SampleShape().isSet(),
+                   "Each trim and shape is its own cached version; an untouched sample is the plain one");
+
+            LiveSet set;
+            set.rows.push_back (LiveSet::makeRow ("Pads", false, 1));
+            set.rows[0].slots[0].file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("pad.wav");
+            set.rows[0].slots[0].shape = shape;
+            LiveSet back;
+            back.loadFromXml (*set.toXml ({}), {});
+            const auto& kept = back.rows.back().slots[0].shape;
+            check (kept == shape, "A channel's trim, fades and gain are saved with the set");
+
+            // The editor, for a look.
+            SampleEditor editor ("Whale song", std::make_shared<const LoopClip> (tone), shape, Theme::rowColour (1), true, 60.0 / 72.0, 4);
+            editor.setBounds (0, 0, 760, 300);
+            const auto image = editor.createComponentSnapshot (editor.getLocalBounds());
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-sample-editor.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (image, out), "Sample editor drawn to " + file.getFullPathName());
+        }
+
+        // ---- Several armed sources record at once, each on its own track ----
+        {
+            Looper looper;
+            looper.prepare (48000.0);
+            looper.setTracks (2);
+            const bool sharedLength = looper.getTracks() == 2;
+
+            juce::AudioBuffer<float> bus (4, 512);
+            looper.startRecording (-1);
+            juce::int64 clock = 0;
+            for (int b = 0; b < 200; ++b)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    bus.setSample (0, i, 0.3f);  bus.setSample (1, i, 0.3f);    // source 1
+                    bus.setSample (2, i, -0.6f); bus.setSample (3, i, -0.6f);   // source 2
+                }
+                if (b == 150)
+                    looper.stopRecording (0);
+                looper.process (bus, 512, clock, 0);
+                clock += 512;
+            }
+            juce::AudioBuffer<float> take;
+            juce::int64 start = 0;
+            const bool collected = looper.collectTake (take, start);
+            check (sharedLength && collected && take.getNumChannels() == 4 && take.getNumSamples() > 70000
+                   && std::abs (take.getSample (0, 5000) - 0.3f) < 1.0e-4f && std::abs (take.getSample (2, 5000) + 0.6f) < 1.0e-4f,
+                   "Two armed sources record together, each on its own track, the same length and in sync");
+
+            looper.setTracks (6);
+            check (looper.getTracks() == 6, "Up to every armed source can have a track (the longest take is shared between them)");
+        }
+
+        // ---- Scenes keep effects, and morph to them ----
+        {
+            FxSettings now, scene;
+            now.delayOn = true;    now.delayMix = 0.4;
+            scene.reverbOn = true; scene.reverbMix = 0.6;
+            now.gainDb = 0.0;      scene.gainDb = -6.0;
+
+            const auto half = blendFx (now, scene, 0.5f);
+            const auto end = blendFx (now, scene, 1.0f);
+            check (half.reverbOn && std::abs (half.reverbMix - 0.3) < 1.0e-9      // coming in: on, its mix halfway up from nothing
+                   && half.delayOn && std::abs (half.delayMix - 0.2) < 1.0e-9      // going: still on, its mix halfway down
+                   && std::abs (half.gainDb + 3.0) < 1.0e-9                        // knobs glide
+                   && sameFx (end, scene) && ! end.delayOn,
+                   "A scene's effects morph in: knobs glide, an effect comes or goes with its mix fading, ending exactly as kept");
+
+            LiveSet set;
+            LiveSet::Scene sc;
+            LiveSet::Scene::Group g { "abc", -3.0, false, true, scene };
+            LiveSet::Scene::Strip st { LiveSet::Scene::Strip::instrument, 0, 0.0, false, true, scene };
+            LiveSet::Scene::Channel ch { "def", true, -2.0 };   // an older scene: no effects kept
+            sc.groups.push_back (g);
+            sc.strips.push_back (st);
+            sc.channels.push_back (ch);
+            set.scenes.push_back (sc);
+            LiveSet back;
+            back.loadFromXml (*set.toXml ({}), {});
+            const auto& kept = back.scenes[0];
+            check (kept.groups[0].hasFx && sameFx (kept.groups[0].fx, scene) && kept.strips[0].hasFx && sameFx (kept.strips[0].fx, scene)
+                   && ! kept.channels[0].hasFx,
+                   "Scenes save each group's, strip's and channel's effects; older scenes without them leave effects alone");
+        }
+
+        // ---- The samples panel in folders ----
+        {
+            const auto base = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-folders-test");
+            LiveSet set;
+            set.pool = { base.getChildFile ("Pads/Bb major.wav"), base.getChildFile ("Pads/G minor.wav"),
+                         base.getChildFile ("Ambient/Birds.wav"), base.getChildFile ("Ambient/Rain.wav"),
+                         base.getChildFile ("One-shots/Thunder.wav") };
+
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            SamplePool panel (formats);
+            panel.setFolders (&set.poolFolders);
+            panel.setFiles (set.pool);
+            const bool byDisk = panel.folderNames() == juce::StringArray ({ "Ambient", "One-shots", "Pads" });
+
+            panel.makeFolder ("Weather");
+            panel.moveToFolder ({ base.getChildFile ("Ambient/Rain.wav"), base.getChildFile ("One-shots/Thunder.wav") }, "Weather");
+            const bool moved = panel.folderOf (base.getChildFile ("Ambient/Rain.wav")) == "Weather"
+                            && panel.folderNames() == juce::StringArray ({ "Ambient", "Pads", "Weather" });   // One-shots now empty
+
+            set.poolFolders.closed.add ("Pads");
+            panel.setFiles (set.pool);
+
+            LiveSet back;
+            back.loadFromXml (*set.toXml (base), base);
+            const bool kept = back.poolFolders.made.contains ("Weather") && back.poolFolders.closed.contains ("Pads")
+                           && back.poolFolders.moved.at (base.getChildFile ("Ambient/Rain.wav").getFullPathName()) == "Weather";
+
+            // Saved somewhere new: the moved samples stay in their folder.
+            std::map<juce::String, juce::File> relocated { { base.getChildFile ("Ambient/Rain.wav").getFullPathName(), base.getChildFile ("New/Rain.wav") } };
+            back.relocate (relocated);
+            const bool follows = back.poolFolders.moved.count (base.getChildFile ("New/Rain.wav").getFullPathName()) == 1;
+
+            check (byDisk && moved && kept && follows,
+                   "Samples sit in their disk folders until moved to the panel's own; folders, moves and closed ones are saved and follow the files");
+
+            panel.setBounds (0, 0, 260, 420);
+            const auto image = panel.createComponentSnapshot (panel.getLocalBounds());
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-sample-folders.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (image, out), "Samples panel drawn to " + file.getFullPathName());
         }
 
         report.add ({});

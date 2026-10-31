@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "ChannelStrip.h"
+#include "GroupLayout.h"
 #include "GroupResize.h"
 #include "LevelMeter.h"
 #include "LiveSet.h"
@@ -53,7 +54,7 @@ public:
         dubWaiting = isWaiting;
         overdubbing = isOverdubbing;
         dubButton.setColour (juce::TextButton::buttonColourId, overdubbing ? Theme::warn : Theme::raised);
-        dubButton.setColour (juce::TextButton::textColourOffId, overdubbing ? Theme::background : dubWaiting ? Theme::warn : Theme::text);
+        dubButton.setColour (juce::TextButton::textColourOffId, overdubbing ? Theme::background : dubWaiting ? Theme::warn : Theme::textDim);
         dubButton.setTooltip (overdubbing ? "Overdubbing onto this loop - press to stop (UNDO removes it)"
                             : dubWaiting  ? "Waiting for the loop to come in - press to cancel"
                                           : "Overdub onto this loop: plays it if needed and records the armed inputs on top");
@@ -79,7 +80,7 @@ public:
         xfButton.setTooltip ("Crossfade to this channel: it fades in while the others in this group fade out");
         fxButton.setTooltip ("This channel's own effects (the group's FX still apply after them)");
         dubButton.setTooltip ("Overdub onto this loop: plays it if needed and records the armed inputs on top");
-        dubButton.setColour (juce::TextButton::textColourOffId, Theme::text);
+        dubButton.setColour (juce::TextButton::textColourOffId, Theme::textDim);
 
         volume.setSliderStyle (juce::Slider::LinearVertical);
         volume.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 18);
@@ -125,7 +126,7 @@ public:
         playButton.setColour (juce::TextButton::buttonColourId,
                               ! lit ? Theme::raised
                                     : state == State::fadingIn || state == State::cuedStart ? Theme::warn : rowColour);
-        playButton.setColour (juce::TextButton::textColourOffId, lit ? Theme::background : Theme::text);
+        playButton.setColour (juce::TextButton::textColourOffId, lit ? Theme::background : Theme::textDim);
         playButton.setTooltip (state == State::cuedStart ? "Waiting for the next beat or bar to come in (press to cancel)"
                              : state == State::cuedStop  ? "Stops on the next beat or bar"
                                                          : juce::String());
@@ -309,6 +310,7 @@ class RowView : public juce::Component
 public:
     static constexpr int headerWidth = 110, cardWidth = 112, cardHeight = 186, cardGap = 6, padding = 6;
     static constexpr int tileHeight = 28, collapsedHeight = 66;   // a collapsed group
+    static constexpr int lineGap = GroupLayout::lineGap (padding); // between lines of channels
     static constexpr const char* dragPrefix = "group:";
 
     int index = 0;
@@ -353,7 +355,7 @@ public:
         const int columns = juce::jlimit (1, items, juce::jmin (fitting, wantedColumns > 0 ? wantedColumns : items));
         const int lines = (items + columns - 1) / columns;
         const int height = isCollapsed ? juce::jmax (collapsedHeight - 2 * padding, lines * (tileHeight + cardGap) - cardGap)
-                                       : juce::jmax (cardHeight, lines * (cardHeight + cardGap) - cardGap);
+                                       : juce::jmax (cardHeight, lines * (cardHeight + lineGap) - lineGap);
         return { headerWidth + 2 * padding + columns * cell - cardGap, height + 2 * padding };
     }
 
@@ -439,7 +441,7 @@ public:
     {
         const int cell = cardWidth + cardGap;
         const int column = juce::jlimit (0, columns, (pos.x - gridArea.getX() + cell / 2) / cell);
-        const int line = juce::jmax (0, (pos.y - gridArea.getY()) / (cellHeight() + cardGap));
+        const int line = juce::jmax (0, (pos.y - gridArea.getY()) / (cellHeight() + linePitchGap()));
         return juce::jlimit (0, cards.size(), line * columns + column);
     }
 
@@ -465,6 +467,13 @@ public:
 
     void paintOverChildren (juce::Graphics& g) override
     {
+        if (strip.isMutedShown())
+        {
+            // Muted: its channels fade back.
+            g.setColour (Theme::panel.withAlpha (0.55f));
+            g.fillRoundedRectangle (gridArea.toFloat().expanded (2.0f), 6.0f);
+        }
+
         g.setColour (colour);
         ColumnResizer::paintGrip (g, *this, colour, fixedColumns);
 
@@ -616,11 +625,12 @@ private:
     juce::Rectangle<int> cellBounds (int i) const
     {
         return { gridArea.getX() + (i % columns) * (cardWidth + cardGap),
-                 gridArea.getY() + (i / columns) * (cellHeight() + cardGap),
+                 gridArea.getY() + (i / columns) * (cellHeight() + linePitchGap()),
                  cardWidth, cellHeight() };
     }
 
-    int cellHeight() const   { return collapsed ? tileHeight : cardHeight; }
+    int cellHeight() const     { return collapsed ? tileHeight : cardHeight; }
+    int linePitchGap() const   { return collapsed ? cardGap : lineGap; }
 
     juce::String name;
     juce::Colour colour = Theme::accent;

@@ -51,9 +51,16 @@ it's installed; writes a pass/fail report; can run while the app is open):
 ```
 
 - **Samples panel (left):** drop audio files or whole folders on it, or use Add files / Add folder. Everything you
-  load for the set lives here. Each sample shows which groups use it.
-- **Groups** (the Inputs among them) can go anywhere: **drag a group by its name** and drop it - an outline
-  shows where it lands, and groups settle up under whatever is above them, so gaps beside a tall group fill in. Drag
+  load for the set lives here. Each sample shows which groups use it. Samples are shown in **folders** - at first the
+  folder each is in on disk (a saved set has one per group). Click a folder to open or close it. Right-click samples >
+  **Move to folder** (or drag them onto a folder) to sort them into folders of your own; right-click a folder to
+  rename or remove it (its samples go back to their own folders) or make a new one. Files are never moved: the folders
+  are saved with the set. A folder with a playing sample in it shows a dot, even closed.
+- **Groups** (loop, input and instrument groups) can go anywhere: **drag a group by its name** and drop it - an
+  outline shows where it lands, and it stays exactly there. Near another group's edge it snaps to it: beside it or
+  below it, tops or sides lined up. Groups never overlap: one dropped onto another (or that grows into the next)
+  pushes just the group in the way down. Collapsing a group pulls the groups under it up to close the space;
+  expanding it pushes them back where they were. Drag
   a group's **right edge** to set how many columns its grid has (6 channels as 6x1, 3x2, 2x3...); double-click the
   edge to go back to automatic. The **<** button folds the
   samples list into a thin strip to give the groups more room (click the strip to open it again).
@@ -63,7 +70,9 @@ it's installed; writes a pass/fail report; can run while the app is open):
 - **Collapse a group** with the arrow by its name (or *Collapse* in its name menu; *Collapse all groups* /
   *Expand all groups* do every group). A collapsed group is a short bar: its name, MUTE and FX, and a tile per
   channel that lights while it plays - click a tile to play or stop it, right-click for its menu. The group fader
-  and MidiMix keep working. The set remembers which groups are collapsed.
+  and MidiMix keep working. The set remembers which groups are collapsed. Input and instrument groups collapse the
+  same way: each strip becomes a tile, lit while it's live (unmuted, and for an input, monitored) - click a tile to
+  mute or unmute that strip.
 - **Channels** each hold one sample with its own volume. Drag samples from the panel (or straight from Explorer) onto
   a channel, or onto a group to fill its empty channels. **+** at the end of a group adds a channel. Click a channel's
   name (or right-click it) to load, rename, switch between Loop and Play once, move, clear or remove it.
@@ -81,25 +90,53 @@ it's installed; writes a pass/fail report; can run while the app is open):
 - **One-shots** (marked `1x`) play once on top of everything; each has its own volume, plus the group's fader.
 - **Channel FX:** every channel (loops, live loops, one-shots) has its own **FX** button with the full effects chain,
   applied before the group's FX. Up to 6 channels per group can have their own effects at once; tails ring out after a
-  channel stops. The button lights in the group's colour when something's on.
+  channel stops. The button lights in the group's colour when something's on. As on a mixer, the channel's fader comes
+  **after** its effects, so pulling it down turns the reverb and delay tails down too.
+- **Safety net:** if an effect ever produces something out of control (an invalid or hugely over-full-scale signal),
+  Airloom empties that effect at once instead of letting it ring, shows a message and notes it in the crash log.
+- **Edit sample:** a channel's menu > **Edit sample...** shows its waveform. Drag the bars at either edge to **trim** the
+  start and end (cuts land where the sound crosses zero, so they don't click; for loops, **Snap to beats** keeps the
+  length a whole number of beats at the set's BPM), and the dots at the top to **fade** in and out. **Gain** and
+  **Normalise** (loudest moment to just under full scale) set its level before the fader; **Reset** goes back to the
+  whole sample. **PLAY** plays the channel itself, and a playing loop crossfades to each change in time. Nothing is
+  written into the file - it's saved with the channel - and it works with reverse (the start is where it starts
+  playing), smooth loop points and channel FX. Overdubbing a trimmed loop records the trimmed version.
 - **Reverse:** a channel's menu > **Play reversed** flips the sample (it crossfades over if playing). The channel
   shows `REV`. Works with smooth loop points and overdubs; recorded files stay forwards on disk.
 - **Samples that aren't cut as loops:** click the channel name > **Smooth loop point** and pick a blend time
   (0.5-8 s). The end of the sample is blended into its start so it repeats without a jump; the channel shows `~`.
   Longer blends are smoother but shorten the loop by that much (at most a third of the sample).
-- Each group has its own **colour** (change it from the group name menu). A playing channel lights up in its group's
+- Each group has its own **colour**, one of 16 (change it from the group name menu); a new group gets whichever
+  colour is used least.
+- **Muted** strips and groups read **MUTED** on a grey key and fade back (a muted group's channels fade with it), so
+  what's live stands out. Red is kept for recording, STOP ALL and MUTE OUT. Buttons stay quiet until they're on. A playing channel lights up in its group's
   colour; amber means fading in or loading.
 - The window resizes freely. **Ctrl +** / **Ctrl -** zoom the whole interface, **Ctrl 0** resets (also in the Set
   menu); the zoom is remembered.
 - **Set > Theme** changes the colours straight away: **Graphite** (the original), **Midnight** (blue), **Ember** (warm),
   **Forest** (green), **Night** (dimmer everything, for a dark room) and **High contrast** (brighter text and edges, for
-  bright stage light or daylight). Group colours stay the same hues. The theme is remembered on this computer.
+  bright stage light or daylight). Each theme has its own take on the 16 group colours - cooler in Midnight, warmer in
+  Ember, softer in Forest, dimmer in Night, stronger in High contrast - but each keeps its hue, so a group is still
+  recognisably its colour. The theme is remembered on this computer.
 - **STOP ALL** fades everything out over the fade time. **Esc** is a quick 1.5 s panic fade.
 - Samples are loaded into memory in the background as soon as they're on a button, so presses respond instantly.
 
 ## Live inputs and effects
 
-- The **INPUTS** section at the top has two input channels, **Mic** (interface input 1) and **Instrument** (input 2).
+- **Live groups:** interface inputs and hosted instruments sit in their own groups, laid out among the loop groups.
+  A new set has an **Inputs** group and an **Instruments** group; **+ GROUP** > *Input group* or *Instrument group*
+  adds more (up to 8 live groups), e.g. "Synths" and "Drones". Like a loop group, each has a **fader**, meter,
+  **MUTE** and **FX** on its left that act on everything in it (Space sends included), and **+** to add an input or
+  instrument to it. Click its name to rename it, recolour it or remove it (its strips move to another group of the
+  same kind); drag its name to move it, and its right edge to set how many strips sit on a line. Move a strip to
+  another group from its name menu > *Move to group*, or **drag the strip** (by its name or background) to reorder it
+  in its group or drop it into another - a line in the group's colour shows where it will land. Live group faders and mutes can be MIDI-learned and are saved
+  in scenes. Sets from before live groups open with their inputs in an Inputs group where the old panel was and
+  their instruments in an Instruments group.
+- **Muted instruments rest:** once a muted instrument (or one in a muted group) has faded out, its plug-in stops
+  running until it's unmuted, so a muted group of synths costs no CPU. An armed instrument keeps running (recording
+  takes it before the mute). Waking up it gets "all notes off", so nothing played before the mute hangs on.
+- The **Inputs** group starts with two input channels, **Mic** (interface input 1) and **Instrument** (input 2).
   Each has its own fader, a meter, mute, **MONITOR** and **FX**. Input and instrument meters show **what you hear**:
   after the effects, the fader and mute.
 - **MONITOR** is off by default so a mic can't feed back when the app opens. With monitoring off the meter shows the
@@ -140,23 +177,28 @@ it's installed; writes a pass/fail report; can run while the app is open):
 
 ## Instruments (VST3)
 
-Hosted instruments sit in the INPUTS section next to Mic and Instrument (up to 4).
+Hosted instruments sit in instrument groups (up to 8 instruments in a set).
 
-- **+ INSTRUMENT** lists your VST3 instruments by maker. The first time, it opens the plug-in scanner and scans the
+- **+** on an instrument group lists your VST3 instruments by maker. The first time, it opens the plug-in scanner and scans the
   standard VST3 folder (`C:\Program Files\Common Files\VST3`); a plug-in that crashes while scanning is remembered
   and skipped next time. Rescan any time from an instrument's menu > *Scan for plug-ins*.
 - Each instrument strip has **EDIT** (the plug-in's own window), **ARM** (record it into the looper, with or
   without its effects), **FX** (the same effects chain as everything else), a fader, meter and mute.
 - **Playing it:** every keyboard plays it (e.g. the MPK mini), plus the **Akai Fire's pads**, which become a scale
-  keyboard: left to right walks the scale, each row up starts three scale steps higher. **One-click keys** for the
-  flutes sit on each instrument strip: **A min** (A minor pentatonic), **Bb maj** and **E maj** (major pentatonic) -
-  the active one lights up (to change the three, edit `fluteKeys` in `MainComponent.cpp`). Or set any **key**, **scale**
-  (minor pentatonic - the default, suits Native American flute keys - major pentatonic, natural minor, major,
-  Dorian, Hijaz, chromatic) and **octave** from the instrument's menu > *Fire pads*. The pads light up: root notes
-  in teal, the other scale notes dim. **GRID <** / **GRID >** on the Fire move the instruments it plays down / up an
+  keyboard: left to right walks the scale, each row up starts three scale steps higher.
+  - **Any key** is where a new instrument starts: the pads play every note (chromatic from C, rows a fourth apart,
+    the Cs lit). Keyboards always play every note; keys only shape the Fire's pads.
+  - To play in a key, pick it from the instrument's menu > *Fire pads* > **Key** and **Scale** (minor or major
+    pentatonic, natural minor, major, Dorian, Hijaz, chromatic), and the **Octave**. The pads light up: root notes in
+    teal, the other scale notes dim. *Any key* at the top of the Key menu goes back to every note.
+  - **Key buttons:** *Fire pads* > **Add key button** puts the instrument's key on a row of one-click buttons shown on
+    every instrument strip (up to 5); the active one lights up. Right-click a button to remove it. The buttons belong to
+    the set: a new set has none (and no row), and sets from before keep the flute keys **A min**, **Bb maj**, **E maj**.
+  - Scenes remember each instrument's key, scale, octave - and Any key. **GRID <** / **GRID >** on the Fire move the instruments it plays down / up an
   octave (octaves 1-6; with SHIFT held they pick the light-show pattern instead). The Fire's **VOLUME knob** (top left) turns
   the faders of the instruments it plays up or down together, all by the same dB, so the balance you set between
-  them on screen stays the same (half a dB a click, faster below -30 dB). The Fire's other buttons stay free
+  them on screen stays the same (half a dB a click, faster below -30 dB). Turned all the way down, the quieter ones
+  wait at off and come back in at their own levels on the way up. Moving a fader yourself sets a new balance. The Fire's other buttons stay free
   for MIDI-learn (e.g. REC), and a GRID button given a MIDI-learn job does that job instead. The MidiMix never
   plays notes.
 - **Preset names:** an instrument's strip is titled with the **preset loaded in it** (e.g. "Flume Pad"), with the
@@ -186,6 +228,12 @@ The looper controls (REC, DUB, UNDO, loop length and status) sit in the middle o
    fader, XF, effects and so on. Loops are grouped and named by the key the Fire is set to: the first loop in Bb
    major is **Loop Bb major 1** in a **Loops Bb major** group (created automatically, at the bottom); with no
    instrument key they go into **Live Loops**. If all 8 groups are taken, new keys share an existing loops group.
+   **Several armed sources** (e.g. two instruments, or an instrument and the mic) record at once, **each onto its own
+   channel**, all starting together in time - named after the source and its key: **Flume Pad A minor 1**,
+   **CONDUIT Bb major 1** (an instrument by its preset or your name for it and its own key; an input by its name and
+   the key being played). A source that stayed silent gets no channel. A single armed instrument is named the same
+   way; a single input keeps **Loop Bb major 1**. With several sources the longest take is shared between them (5
+   minutes for one, 2.5 each for two, never less than a minute each).
 4. **DUB** records on top of the latest loop (or any loop: its menu > *Overdub on this loop*); press again to stop.
    Every loop channel also has its own small **DUB** under PLAY: it overdubs onto that loop (starting it first, and
    waiting for it to come in, if it's stopped) and lights amber while overdubbing. A second press always undoes the
@@ -229,7 +277,7 @@ play the moment you play them.
 
 ## Inputs
 
-The INPUTS group starts with two (Mic on interface input 1, Instrument on input 2). **+ INPUT** adds another, up to
+The Inputs group starts with two (Mic on interface input 1, Instrument on input 2). **+** on an input group adds another, up to
 eight - it takes the first interface input no other strip uses, or input 1 again when they're all taken (the same
 mic through a second set of effects). Click an input's name to pick its source: any single
 interface input (**Mono input**), or two side by side as a **Stereo pair** (e.g. a synth or a stereo mic on 3+4).
@@ -242,7 +290,10 @@ like the MOTU M Series or a Scarlett 2i2 shows Airloom just its first two inputs
 A **scene** is a saved mix: which loops are playing; every channel's level; every group's, input's and instrument's
 fader and mute; and each instrument's key (scale and octave) - the key changes the moment the scene is pressed, and
 the Fire's pads relight. Mutes fade over the morph rather than cutting, so muting one instrument and unmuting another
-in the next scene crossfades from one voice to the other. The **SCENES**
+in the next scene crossfades from one voice to the other. Scenes also keep **effects** - every channel's, group's,
+input's and instrument's - and morph to them: knobs glide over the morph time, and an effect switched on or off comes
+or goes with its mix fading, so reverbs and delays arrive and leave smoothly. Scenes made before effects were kept
+leave effects alone until they're saved again (with *keep changes* on, leaving the scene does it). The **SCENES**
 strip above the groups holds them. Set up a mix and press **+ SCENE** to save it; press a scene to move there.
 
 - Recalling a scene **morphs**: loops it doesn't use fade out, loops it does fade in (on the beat or bar, if **Start**
@@ -392,6 +443,12 @@ to assign a MIDI button.
 
 Everything - samples, groups, channels, volumes, mutes, effects, input settings, fade time - is a **set**. The working session is
 saved automatically, so the app reopens exactly where you left off.
+
+- **A saved set saves itself:** a moment after any change, its `.liverig` file is rewritten, so opening another set
+  (or a crash) never loses work. Before overwriting, Airloom keeps a dated copy in a **Backups** folder beside the set
+  (at most one every 10 minutes, the newest 20) - **Set > Show backups**, then open any of them like a set. A set that
+  has never been saved is kept in the session; **New set** or **Open set** asks before replacing it.
+- **Set > Rename set...** renames the set's file (its folder stays as it is); **Set > Open recent** lists the last 8.
 
 - **Set > Save set as new folder...** creates a folder and gathers every sample into it - one subfolder per group,
   plus `Samples/` for anything not on a channel. You choose to **copy** (originals stay put) or **move** the files.

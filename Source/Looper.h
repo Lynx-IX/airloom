@@ -15,6 +15,9 @@
 // playing, compensating for the interface's round-trip latency so the new
 // layer lines up with what the performer heard.
 //
+// Several sources can record at once, each on its own track (setTracks before starting):
+// the take then holds two channels per track, all the same length and in sync.
+//
 // Thread model: the start/stop/collect calls are made from the message
 // thread, process() from the audio thread.
 class Looper
@@ -23,6 +26,12 @@ public:
     enum class State { idle, waiting, recording, finishing, finished, overdubbing };
 
     void prepare (double sampleRate, double maxSeconds = 300.0);
+
+    // How many stereo tracks the next recording has. Only while idle (not recording or
+    // waiting). They share the memory one track had: the longest take is maxSeconds / tracks,
+    // but at least a minute.
+    void setTracks (int tracks);
+    int getTracks() const   { return take.getNumChannels() / 2; }
 
     // Starts at clock time 'at' (to the sample), or with -1 at the next block.
     // False if the last take hasn't been collected yet.
@@ -39,16 +48,16 @@ public:
 
     // Copies out a finished take, ready to loop: exactly 'loopLength' samples, with
     // the audio recorded just past the end blended into the start so the seam is
-    // inaudible. Also returns when the take started on LoopPlayer::blockClock.
+    // inaudible - two channels per track. Also returns when the take started on LoopPlayer::blockClock.
     bool collectTake (juce::AudioBuffer<float>& destination, juce::int64& startClock);
 
-    // 'bus' holds this block's armed-input signal (2 channels) from sample 0.
+    // 'bus' holds this block's armed signal from sample 0: two channels per track (overdubs use the first two).
     void process (const juce::AudioBuffer<float>& bus, int numSamples, juce::int64 clock, int latencySamples);
 
 private:
     void finishAt (int loopLength);
 
-    double sampleRate = 48000.0;
+    double sampleRate = 48000.0, maxTakeSeconds = 300.0;
     int seamSamples = 1440;                        // recorded past the end, blended into the start
     juce::AudioBuffer<float> take;                 // preallocated, written by the audio thread
     std::atomic<int> state { (int) State::idle };

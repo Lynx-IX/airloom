@@ -44,6 +44,7 @@ struct LiveSet
         double volumeDb = 0.0;
         double smoothSeconds = 0.0;    // > 0: blend the end into the start so a non-loop repeats seamlessly
         bool reverse = false;          // play the sample backwards
+        SampleShape shape;             // trim, fades and gain (Edit sample...)
         FxSettings fx;                 // this channel's own effects, before the row's
         juce::String uid = newUid();   // what MIDI assignments refer to
 
@@ -93,8 +94,30 @@ struct LiveSet
         juce::String insertState;      // its settings, base64
         juce::String insertName;
 
+        juce::String group;            // the uid of the live group it sits in
+        int order = 0;                 // its place in the group (lower first; ties: inputs, then by index)
+
         bool armed = false;            // runtime: feeds the looper; never restored, for safety
     };
+
+    // A group of live strips (interface inputs or instruments): its own fader, mute and
+    // effects, applied to everything in it, like a loop group.
+    struct LiveGroup
+    {
+        juce::String name;
+        bool instruments = false;      // what its + adds: instruments, or interface inputs
+        int colour = 4;                // index into Theme::rowColours
+        double faderDb = 0.0;
+        bool muted = false;
+        FxSettings fx;
+        int columns = 0;               // grid width in strips; 0 = automatic (one line)
+        bool collapsed = false;        // shown as a short bar of strip tiles
+        juce::Point<int> position { -1, -1 };
+        juce::String uid = newUid();
+
+        int engine = -1;               // runtime: which live bus plays it
+    };
+    static constexpr int maxLiveGroups = 8;
 
     enum class LoopLength { free, snapToBars, matchFirstLoop };
 
@@ -111,12 +134,15 @@ struct LiveSet
         FxSettings fx;
         juce::String midiSource;       // the MIDI device that plays it (its name when last seen); empty = every keyboard and Fire
         juce::String midiSourceId;     // that device's USB path, which survives Windows renaming it
+        bool anyKey = true;            // the Fire's pads play every note (chromatic); false: padRoot/padScale
         int padRoot = 9, padScale = 0, padOctave = 3;
+        juce::String group;            // the uid of the live group it sits in
+        int order = 0;                 // its place in the group, like an input's
 
         bool armed = false;            // runtime, like the inputs
     };
 
-    static constexpr int maxInstruments = 4;
+    static constexpr int maxInstruments = 8;
 
     // A saved mix: which loops play and every channel and group level. Recalling one morphs
     // there over 'morphSeconds'. Channels and groups are found by uid; ones added since are
@@ -127,10 +153,12 @@ struct LiveSet
         juce::String uid = newUid();   // what MIDI assignments refer to
         double morphSeconds = 8.0;
 
-        struct Channel { juce::String uid; bool playing = false; double volumeDb = 0.0; };
-        struct Group   { juce::String uid; double faderDb = 0.0; bool muted = false; };
-        struct Key     { int instrument = 0, root = 9, scale = 0, octave = 3; };   // an instrument's Fire key, by index
-        struct Strip   { enum Kind { input, instrument } kind = input; int index = 0; double faderDb = 0.0; bool muted = false; };
+        // Each also keeps its effects (hasFx false: a scene from before they were kept - left alone).
+        struct Channel { juce::String uid; bool playing = false; double volumeDb = 0.0; bool hasFx = false; FxSettings fx; };
+        struct Group   { juce::String uid; double faderDb = 0.0; bool muted = false; bool hasFx = false; FxSettings fx; };
+        struct Key     { int instrument = 0, root = 9, scale = 0, octave = 3; bool anyKey = false; };   // an instrument's Fire key, by index
+        struct Strip   { enum Kind { input, instrument } kind = input; int index = 0; double faderDb = 0.0; bool muted = false;
+                         bool hasFx = false; FxSettings fx; };
         std::vector<Channel> channels;
         std::vector<Group> groups;
         std::vector<Key> keys;
@@ -144,9 +172,25 @@ struct LiveSet
     std::vector<Row> rows;
     std::vector<Input> inputs = defaultInputs();
     std::vector<Instrument> instruments;
+    std::vector<LiveGroup> liveGroups;
     std::vector<Scene> scenes;
+
+    // One-click keys shown on every instrument strip (none: no row). Sets from before these were
+    // per set start with the original three flute keys.
+    struct KeyButton { int root = 9, scale = 0; };
+    std::vector<KeyButton> keyButtons;
     bool scenesKeepChanges = true;     // leaving a scene saves the mix you made in it
     juce::Array<juce::File> pool;      // every sample loaded into the set, used or not
+
+    // The samples panel's folders. A sample sits in the folder it's in on disk unless it's been
+    // moved to one of the panel's own (by full path); moving never touches the file.
+    struct PoolFolders
+    {
+        std::map<juce::String, juce::String> moved;   // sample path -> folder name
+        juce::StringArray made;                       // folders made in the panel (kept even while empty)
+        juce::StringArray closed;                     // folders shown closed
+    };
+    PoolFolders poolFolders;
     juce::File file;                   // the .liverig file; empty until saved
     double masterDb = 0.0;
     FxSettings space = SpaceReverb::defaults();   // the shared reverb channels send to
@@ -161,15 +205,20 @@ struct LiveSet
     struct TimeSignature { int beats, unit; };
     static constexpr TimeSignature timeSignatures[] = { { 2, 4 }, { 3, 4 }, { 4, 4 }, { 5, 4 }, { 6, 8 }, { 7, 8 } };
     LoopLength loopLength = LoopLength::free;
-    juce::Point<int> inputsPosition { -1, -1 };   // where the Inputs + Looper group was placed
     std::shared_ptr<juce::XmlElement> midi;       // MIDI assigned to this set's channels and groups
-    int inputsColumns = 0;             // its grid width in strips; 0 = automatic
 
     static constexpr int maxRows = 8;  // one per MidiMix fader
     static constexpr const char* fileExtension = ".liverig";
     static constexpr const char* packExtension = ".liverigpack";   // a set and its samples in one file (a zip)
 
     static LiveSet makeDefault();
+
+    // Every input and instrument in a live group of its kind: makes an Inputs and an
+    // Instruments group when there are none (new sets, and sets from before live groups),
+    // and puts strips whose group is gone into the first group of their kind.
+    void ensureLiveGroups();
+    LiveGroup* findLiveGroup (const juce::String& uid);
+    LiveGroup* firstLiveGroup (bool instruments);
     static Row makeRow (const juce::String& name, bool oneShot, int numSlots = 4);
 
     // Finds a channel by id; both pointers are null if it no longer exists.
