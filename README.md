@@ -460,6 +460,10 @@ saved automatically, so the app reopens exactly where you left off.
   are and plug-ins stay loaded. Playing isn't undone: faders, mutes, starting and stopping loops, scene recalls, keys,
   octaves and tempo. Changes in quick succession (turning a knob) are one step. Adding or removing an input or
   instrument isn't undone (their settings are). Opening a set starts its own history.
+- **Messages:** confirmations ("Saved", "Undone", "recorded") and errors appear as cards in the top-right corner for a
+  few seconds - errors (red edge) stay longer; click a card to dismiss it. The line along the bottom keeps hints, MIDI
+  learn prompts and MIDI devices, and at its right end shows what's busy (samples or an instrument loading, a set
+  being packed). Dialogs (rename, confirm) highlight the button Enter presses.
 - **Finding things:** every channel, group and input or instrument strip has a small **...** button (top right)
   that opens its options - the same menu as clicking its name or right-clicking it. **F1** (or Set > Manual) opens
   this manual inside Airloom; Set > Welcome screen shows the first-run welcome again.

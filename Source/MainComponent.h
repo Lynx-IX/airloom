@@ -11,6 +11,7 @@
 #include "LiveDock.h"
 #include "SampleEditor.h"
 #include "Help.h"
+#include "SettingsPanel.h"
 #include "LooperBar.h"
 #include "InstrumentChannel.h"
 #include "LiveSet.h"
@@ -75,6 +76,7 @@ private:
 
     // The Settings window (Audio, Look, Layout); tab 0 is Audio.
     void showSettings (int tab = 0);
+    void styleDialog (juce::AlertWindow& w);
     void showHelp();
     void showWelcome();
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -559,6 +561,10 @@ private:
     double currentBeatPosition (bool& recording) const;
     juce::Rectangle<int> headerArea, messageArea;
     std::vector<int> transportDividers;   // x of the thin lines between the bottom bar's sections
+    ToastStack toasts;                    // confirmations and errors, top right
+    juce::Rectangle<int> busyArea;        // the end of the status line: what's loading or saving
+    juce::String busyText;
+    void updateNotifications();
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     juce::String deviceStatus, midiStatus, errorMessage, infoMessage;

@@ -352,6 +352,8 @@ MainComponent::MainComponent()
                 self->showWelcome();
         });
 
+    addAndMakeVisible (toasts);
+
     addAndMakeVisible (perfMeter);
     perfMeter.onReset = [this] { dropoutBase = deviceManager.getXRunCount(); lastDropouts = 0; lastDropoutMs = 0; };
 
@@ -459,97 +461,6 @@ void MainComponent::showDeviceSettings()
     alertBanner.setMessage ({});
 
     showSettings (0);
-}
-
-namespace
-{
-    // The Settings window: Audio (the device), Look (theme, zoom), Layout (how the page behaves).
-    class SettingsPanel : public juce::Component
-    {
-    public:
-        std::function<void (int)> onTheme;
-        std::function<void (float)> onZoom;
-        std::function<void (bool)> onRearrange, onDockFolded, onSamplesFolded;
-
-        SettingsPanel (juce::AudioDeviceManager& devices, int tab, float zoom, bool rearrange, bool dockFolded, bool samplesFolded)
-        {
-            addAndMakeVisible (tabs);
-            tabs.setTabBarDepth (34);
-            tabs.setOutline (0);
-
-            auto* audio = new juce::AudioDeviceSelectorComponent (devices, 0, LiveSet::maxDeviceInputs, 0, 2, false, false, true, false);
-            tabs.addTab ("Audio", Theme::panel, audio, true);
-
-            auto* look = new juce::Component();
-            look->addAndMakeVisible (themeLabel);
-            look->addAndMakeVisible (themeBox);
-            look->addAndMakeVisible (zoomLabel);
-            look->addAndMakeVisible (zoomSlider);
-            themeLabel.setText ("Theme", juce::dontSendNotification);
-            for (int i = 0; i < Theme::numPalettes; ++i)
-                themeBox.addItem (Theme::palettes[i].name, i + 1);
-            themeBox.setSelectedId (Theme::currentPalette + 1, juce::dontSendNotification);
-            themeBox.onChange = [this] { if (onTheme) onTheme (themeBox.getSelectedId() - 1); };
-            zoomLabel.setText ("Zoom", juce::dontSendNotification);
-            zoomSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-            zoomSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 24);
-            zoomSlider.setRange (60.0, 160.0, 10.0);
-            zoomSlider.setValue (juce::roundToInt (zoom * 100.0f), juce::dontSendNotification);
-            zoomSlider.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v)) + "%"; };
-            zoomSlider.onDragEnd = [this] { if (onZoom) onZoom ((float) zoomSlider.getValue() / 100.0f); };
-            zoomSlider.onValueChange = [this] { if (! zoomSlider.isMouseButtonDown() && onZoom) onZoom ((float) zoomSlider.getValue() / 100.0f); };
-            look->setComponentID ("look");
-            tabs.addTab ("Look", Theme::panel, look, true);
-
-            auto* layout = new juce::Component();
-            for (auto* t : { &rearrangeToggle, &dockToggle, &samplesToggle })
-                layout->addAndMakeVisible (t);
-            rearrangeToggle.setButtonText ("Rearrange groups to fit the window (off: keep the layout, scroll sideways)");
-            dockToggle.setButtonText ("Fold the LIVE dock away");
-            samplesToggle.setButtonText ("Fold the samples list away");
-            rearrangeToggle.setToggleState (rearrange, juce::dontSendNotification);
-            dockToggle.setToggleState (dockFolded, juce::dontSendNotification);
-            samplesToggle.setToggleState (samplesFolded, juce::dontSendNotification);
-            rearrangeToggle.onClick = [this] { if (onRearrange) onRearrange (rearrangeToggle.getToggleState()); };
-            dockToggle.onClick = [this] { if (onDockFolded) onDockFolded (dockToggle.getToggleState()); };
-            samplesToggle.onClick = [this] { if (onSamplesFolded) onSamplesFolded (samplesToggle.getToggleState()); };
-            layout->setComponentID ("layout");
-            tabs.addTab ("Layout", Theme::panel, layout, true);
-
-            tabs.setCurrentTabIndex (juce::jlimit (0, 2, tab), false);
-            setSize (560, 460);
-        }
-
-        void paint (juce::Graphics& g) override   { g.fillAll (Theme::panel); }
-
-        void resized() override
-        {
-            tabs.setBounds (getLocalBounds());
-
-            auto look = tabs.getLocalBounds().withTrimmedTop (tabs.getTabBarDepth()).reduced (24);
-            auto row = look.removeFromTop (30);
-            themeLabel.setBounds (row.removeFromLeft (80));
-            themeBox.setBounds (row.removeFromLeft (220));
-            look.removeFromTop (14);
-            row = look.removeFromTop (30);
-            zoomLabel.setBounds (row.removeFromLeft (80));
-            zoomSlider.setBounds (row.removeFromLeft (320));
-
-            auto layout = tabs.getLocalBounds().withTrimmedTop (tabs.getTabBarDepth()).reduced (24);
-            for (auto* t : { &rearrangeToggle, &dockToggle, &samplesToggle })
-            {
-                t->setBounds (layout.removeFromTop (30));
-                layout.removeFromTop (8);
-            }
-        }
-
-    private:
-        juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-        juce::Label themeLabel, zoomLabel;
-        juce::ComboBox themeBox;
-        juce::Slider zoomSlider;
-        juce::ToggleButton rearrangeToggle, dockToggle, samplesToggle;
-    };
 }
 
 void MainComponent::showHelp()
@@ -2144,6 +2055,38 @@ void MainComponent::recordUndoPoint()
     committed = now;
     undoCheckPending = undoCheckQuiet = false;
     lastUndoCheckMs = juce::Time::getMillisecondCounter();
+}
+
+void MainComponent::updateNotifications()
+{
+    // Confirmations and errors set anywhere become cards (and leave the status line to hints).
+    if (errorMessage.isNotEmpty())
+    {
+        toasts.post (errorMessage, ToastStack::Kind::error);
+        errorMessage.clear();
+        repaint (messageArea);
+    }
+    if (infoMessage.isNotEmpty())
+    {
+        toasts.post (infoMessage, ToastStack::Kind::info);
+        infoMessage.clear();
+        repaint (messageArea);
+    }
+
+    // What's busy: samples loading, an instrument loading, a pack being written or opened.
+    juce::String busy;
+    if (packProgress != nullptr)
+        busy = "Packing the set  " + juce::String (juce::roundToInt (packProgress->load() * 100.0)) + "%";
+    else if (std::any_of (instrumentLoading.begin(), instrumentLoading.end(), [] (bool b) { return b; }))
+        busy = "Loading an instrument...";
+    else if (! pendingLoads.empty())
+        busy = "Loading " + juce::String ((int) pendingLoads.size()) + ((int) pendingLoads.size() == 1 ? " sample..." : " samples...");
+
+    if (busy != busyText || busy.isNotEmpty())
+    {
+        busyText = busy;
+        repaint (busyArea);
+    }
 }
 
 void MainComponent::undo()
@@ -6414,12 +6357,34 @@ void MainComponent::moveChannelTo (int slotId, int targetRow, int targetIndex)
 }
 
 //==============================================================================
+void MainComponent::styleDialog (juce::AlertWindow& w)
+{
+    // The first button is the one Enter presses: it stands out.
+    if (auto* primary = w.getButton (0))
+    {
+        primary->setColour (juce::TextButton::buttonColourId, Theme::accent);
+        primary->setColour (juce::TextButton::textColourOffId, Theme::background);
+    }
+    for (int i = 0; i < w.getNumChildComponents(); ++i)
+        if (auto* editor = dynamic_cast<juce::TextEditor*> (w.getChildComponent (i)))
+        {
+            editor->setColour (juce::TextEditor::backgroundColourId, Theme::background);
+            editor->setColour (juce::TextEditor::outlineColourId, Theme::panelEdge.brighter (0.2f));
+            editor->setColour (juce::TextEditor::focusedOutlineColourId, Theme::accent);
+            editor->setFont (juce::FontOptions (16.0f));
+            editor->setIndents (8, 6);
+        }
+}
+
 void MainComponent::askText (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> onOk)
 {
     auto* w = new juce::AlertWindow (title, {}, juce::MessageBoxIconType::NoIcon, this);
     w->addTextEditor ("text", initial);
     w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
     w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    styleDialog (*w);
+    if (auto* editor = w->getTextEditor ("text"))
+        editor->selectAll();   // typing replaces the old name
 
     // Modal callbacks run before the window is deleted, so reading it here is safe.
     w->enterModalState (true, juce::ModalCallbackFunction::create ([w, onOk] (int r)
@@ -6433,15 +6398,17 @@ void MainComponent::askText (const juce::String& title, const juce::String& init
 void MainComponent::askChoice (const juce::String& title, const juce::String& message,
                                const juce::StringArray& buttons, std::function<void (int)> onChosen)
 {
-    auto* w = new juce::AlertWindow (title, message, juce::MessageBoxIconType::QuestionIcon, this);
+    auto* w = new juce::AlertWindow (title, message, juce::MessageBoxIconType::NoIcon, this);
 
-    // Buttons return 1, 2, ...; the last one is Cancel and returns 0.
+    // Buttons return 1, 2, ...; the last one is Cancel and returns 0. Enter takes the first.
     for (int i = 0; i < buttons.size(); ++i)
     {
         const bool isCancel = i == buttons.size() - 1;
         w->addButton (buttons[i], isCancel ? 0 : i + 1,
-                      isCancel ? juce::KeyPress (juce::KeyPress::escapeKey) : juce::KeyPress());
+                      isCancel ? juce::KeyPress (juce::KeyPress::escapeKey)
+                               : i == 0 ? juce::KeyPress (juce::KeyPress::returnKey) : juce::KeyPress());
     }
+    styleDialog (*w);
 
     w->enterModalState (true, juce::ModalCallbackFunction::create ([onChosen] (int r) { onChosen (r); }), true);
 }
@@ -7150,6 +7117,7 @@ void MainComponent::timerCallback()
     updateMuteButton();
     updatePerfMeter();
     updateFireLightShow();
+    updateNotifications();
 
     if (setFileDirty && juce::Time::getMillisecondCounter() - lastChangeMs > autosaveDelayMs)
         writeSetFile();
@@ -7451,7 +7419,23 @@ void MainComponent::paint (juce::Graphics& g)
     }
 
     g.setColour (colour);
-    g.drawText (message, messageArea, juce::Justification::centredLeft, true);
+    g.drawText (message, busyText.isEmpty() ? messageArea : messageArea.withRight (busyArea.getX() - 12),
+                juce::Justification::centredLeft, true);
+
+    // At the end of the line: what's loading or saving, with a turning arc.
+    if (busyText.isNotEmpty())
+    {
+        auto area = busyArea;
+        const auto spin = area.removeFromRight (18).toFloat().withSizeKeepingCentre (14.0f, 14.0f);
+        const float angle = (float) (juce::Time::getMillisecondCounter() % 1000) / 1000.0f * juce::MathConstants<float>::twoPi;
+        juce::Path arc;
+        arc.addCentredArc (spin.getCentreX(), spin.getCentreY(), 6.0f, 6.0f, angle, 0.0f, 4.2f, true);
+        g.setColour (Theme::accent);
+        g.strokePath (arc, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (Theme::textDim);
+        g.setFont (juce::FontOptions (14.0f));
+        g.drawText (busyText, area.withTrimmedRight (8), juce::Justification::centredRight, true);
+    }
 }
 
 void MainComponent::resized()
@@ -7553,6 +7537,10 @@ void MainComponent::resized()
     area.removeFromTop (10);
     rowsViewport.setBounds (area);
     countInOverlay.setBounds (stageMode ? stageArea : area);
+    toasts.setBounds (getLocalBounds().withTop (headerArea.getBottom() + 14).withHeight (4 * 70).withTrimmedRight (140)
+                          .withLeft (getWidth() - 140 - 400));
+    toasts.toFront (false);
+    busyArea = messageArea.withLeft (messageArea.getRight() - 320);
     alertBanner.setBounds (area.removeFromTop (60).reduced (40, 4));
     layoutRows();
 }

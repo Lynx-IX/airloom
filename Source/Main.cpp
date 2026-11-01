@@ -87,8 +87,11 @@ public:
             setResizable (true, true);
             setResizeLimits (900, 560, 10000, 10000);
 
-            // Where it was last time (size, place, maximised); the first time, large in the middle.
-            if (! restoreWindowStateFromString (main->savedWindowState()))
+            // Where it was last time (size and place; maximised once it's showing - maximising a window
+            // that isn't shown yet can leave it minimised); the first time, large in the middle.
+            const auto state = main->savedWindowState().trim();
+            const bool maximised = state.startsWithIgnoreCase ("fs");
+            if (! restoreWindowStateFromString (maximised ? state.substring (2).trim() : state))
             {
                 if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
                     centreWithSize (juce::jmin (1440, display->userArea.getWidth() * 9 / 10),
@@ -98,9 +101,16 @@ public:
             }
 
             setVisible (true);
-            if (main->savedWindowState().startsWith ("fs"))
-                setFullScreen (true);   // maximised again, now it's on screen
             tintTitleBar();
+            if (maximised)
+                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainWindow> (this)]
+                {
+                    if (auto* w = safe.getComponent())
+                    {
+                        w->setMinimised (false);
+                        w->setFullScreen (true);
+                    }
+                });
         }
 
         ~MainWindow() override

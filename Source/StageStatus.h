@@ -151,3 +151,105 @@ private:
     float brightness = 0.0f;
     bool isLast = false;
 };
+
+
+// Notifications: confirmations and errors as short-lived cards in the top-right corner, newest at
+// the top. Errors (red edge) stay longer than confirmations (accent edge); a click dismisses one.
+class ToastStack : public juce::Component, private juce::Timer
+{
+public:
+    enum class Kind { info, error };
+
+    ToastStack()   { setInterceptsMouseClicks (true, false); }
+
+    void post (const juce::String& text, Kind kind)
+    {
+        if (text.isEmpty())
+            return;
+        // The same message again just stays up longer.
+        for (auto& t : toasts)
+            if (t.text == text)
+            {
+                t.born = juce::Time::getMillisecondCounter();
+                return;
+            }
+        toasts.insert (toasts.begin(), { text, kind, juce::Time::getMillisecondCounter() });
+        if (toasts.size() > 4)
+            toasts.pop_back();
+        startTimerHz (30);
+        repaint();
+    }
+
+    int count() const   { return (int) toasts.size(); }
+
+    // Whether a point (in this component) is on a card: the rest of the area lets clicks through.
+    bool hitTest (int x, int y) override
+    {
+        for (int i = 0; i < (int) toasts.size(); ++i)
+            if (cardBounds (i).contains (x, y))
+                return true;
+        return false;
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        for (int i = 0; i < (int) toasts.size(); ++i)
+            if (cardBounds (i).contains (e.getPosition()))
+            {
+                toasts.erase (toasts.begin() + i);
+                repaint();
+                return;
+            }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto now = juce::Time::getMillisecondCounter();
+        for (int i = 0; i < (int) toasts.size(); ++i)
+        {
+            const auto& t = toasts[(size_t) i];
+            const auto age = (float) (now - t.born), life = (float) lifeOf (t);
+            const float alpha = juce::jlimit (0.0f, 1.0f, juce::jmin (age / 150.0f, (life - age) / 400.0f));
+            const auto r = cardBounds (i).toFloat();
+
+            g.setOpacity (alpha);
+            g.setColour (juce::Colours::black.withAlpha (0.35f * alpha));
+            g.fillRoundedRectangle (r.translated (0.0f, 3.0f), 8.0f);
+            Theme::drawSurface (g, r, Theme::raised, 8.0f);
+            const auto edge = t.kind == Kind::error ? Theme::danger : Theme::accent;
+            g.setColour (edge.withAlpha (alpha));
+            g.fillRoundedRectangle (r.withWidth (4.0f).reduced (0.0f, 6.0f), 2.0f);
+
+            g.setColour ((t.kind == Kind::error ? Theme::danger.brighter (0.4f) : Theme::text).withAlpha (alpha));
+            g.setFont (juce::FontOptions (14.5f));
+            g.drawFittedText (t.text, r.toNearestInt().reduced (16, 8), juce::Justification::centredLeft, 3, 0.9f);
+        }
+    }
+
+private:
+    struct Toast { juce::String text; Kind kind; juce::uint32 born; };
+
+    static juce::uint32 lifeOf (const Toast& t)
+    {
+        // Long enough to read: longer for errors and long messages.
+        return (t.kind == Kind::error ? 7000u : 4000u) + (juce::uint32) t.text.length() * 30u;
+    }
+
+    juce::Rectangle<int> cardBounds (int i) const
+    {
+        return { getWidth() - cardWidth, i * (cardHeight + 8), cardWidth, cardHeight };
+    }
+
+    void timerCallback() override
+    {
+        const auto now = juce::Time::getMillisecondCounter();
+        toasts.erase (std::remove_if (toasts.begin(), toasts.end(), [now] (const Toast& t) { return now - t.born > lifeOf (t); }),
+                      toasts.end());
+        if (toasts.empty())
+            stopTimer();
+        repaint();
+    }
+
+    static constexpr int cardWidth = 400, cardHeight = 62;
+    std::vector<Toast> toasts;
+};

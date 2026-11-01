@@ -20,6 +20,8 @@
 #include "SampleEditor.h"
 #include "SamplePool.h"
 #include "Help.h"
+#include "StageStatus.h"
+#include "SettingsPanel.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
@@ -2236,6 +2238,84 @@ namespace FxSelfTest
             check (manual.contains ("Undo") && manual.contains ("LIVE dock") && out.openedOk()
                    && juce::PNGImageFormat().writeImageToStream (both, out),
                    "The manual is built in (F1) and the welcome screen draws - pictures in " + file.getFullPathName());
+        }
+
+        // ---- Dialogs, drawn for a look ----
+        {
+            juce::AlertWindow rename ("Rename group", {}, juce::MessageBoxIconType::NoIcon);
+            rename.addTextEditor ("text", "Ambient");
+            rename.addButton ("OK", 1);
+            rename.addButton ("Cancel", 0);
+            juce::AlertWindow confirm ("Remove group", "Remove Ambient and its channels? The samples stay in the Samples list.",
+                                       juce::MessageBoxIconType::NoIcon);
+            confirm.addButton ("Remove", 1);
+            confirm.addButton ("Cancel", 0);
+            for (auto* w : { &rename, &confirm })   // as Airloom's dialogs: the first button stands out
+            {
+                w->getButton (0)->setColour (juce::TextButton::buttonColourId, Theme::accent);
+                w->getButton (0)->setColour (juce::TextButton::textColourOffId, Theme::background);
+            }
+            const auto a = rename.createComponentSnapshot (rename.getLocalBounds());
+            const auto b = confirm.createComponentSnapshot (confirm.getLocalBounds());
+            juce::Image both (juce::Image::ARGB, a.getWidth() + b.getWidth() + 30, juce::jmax (a.getHeight(), b.getHeight()) + 20, true);
+            {
+                juce::Graphics g (both);
+                g.fillAll (Theme::background);
+                g.drawImageAt (a, 10, 10);
+                g.drawImageAt (b, a.getWidth() + 20, 10);
+            }
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-dialogs.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (both, out), "Dialogs drawn to " + file.getFullPathName());
+        }
+
+        // ---- Notification cards ----
+        {
+            ToastStack cards;
+            cards.setBounds (0, 0, 420, 220);
+            cards.post ("Flume Pad A minor 1, CONDUIT A minor 1 recorded (0:16) - each on its own channel", ToastStack::Kind::info);
+            cards.post ("Could not save C:\Users\Lynx\Desktop\My Set\Flute Performance Set.liverig", ToastStack::Kind::error);
+            cards.post ("Undone", ToastStack::Kind::info);
+            cards.post ("Undone", ToastStack::Kind::info);   // the same again: one card, kept up longer
+            juce::Thread::sleep (200);                       // past the fade-in
+            juce::Image image (juce::Image::ARGB, 420, 220, true);
+            {
+                juce::Graphics g (image);
+                g.fillAll (Theme::background);
+                cards.paintEntireComponent (g, false);
+            }
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-toasts.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (cards.count() == 3 && out.openedOk() && juce::PNGImageFormat().writeImageToStream (image, out),
+                   "Confirmations and errors show as cards (a repeat doesn't stack) - drawn to " + file.getFullPathName());
+        }
+
+        // ---- The FX panel and Settings, for a look ----
+        {
+            FxSettings fx;
+            fx.reverbOn = true; fx.delayOn = true; fx.eqOn = true; fx.gainDb = -3.0;
+            FxPanel panel ("Flume Pad", fx, Theme::rowColour (5), [] (const FxSettings&) {});
+            const auto fxImage = panel.createComponentSnapshot (panel.getLocalBounds());
+
+            juce::AudioDeviceManager devices;
+            SettingsPanel look (devices, 1, 1.0f, true, false, true), layout (devices, 2, 1.0f, false, true, false);
+            const auto lookImage = look.createComponentSnapshot (look.getLocalBounds());
+            const auto layoutImage = layout.createComponentSnapshot (layout.getLocalBounds());
+
+            juce::Image sheet (juce::Image::ARGB, fxImage.getWidth() + 560 + 30, juce::jmax (fxImage.getHeight(), 2 * 460 + 10) + 20, true);
+            {
+                juce::Graphics g (sheet);
+                g.fillAll (juce::Colours::black);
+                g.drawImageAt (fxImage, 10, 10);
+                g.drawImageAt (lookImage, fxImage.getWidth() + 20, 10);
+                g.drawImageAt (layoutImage, fxImage.getWidth() + 20, 480);
+            }
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-panels.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (sheet, out), "FX panel and Settings drawn to " + file.getFullPathName());
         }
 
         report.add ({});

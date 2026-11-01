@@ -492,6 +492,55 @@ namespace Theme
 
         juce::Font getPopupMenuFont() override   { return juce::Font (juce::FontOptions (15.0f)); }
 
+        //==============================================================================
+        // Tabs (the Settings window): plain labels, the open one in full text with an accent line under it.
+        int getTabButtonBestWidth (juce::TabBarButton& button, int) override
+        {
+            return juce::GlyphArrangement::getStringWidthInt (heading (13.0f, 0.1f), button.getButtonText().toUpperCase()) + 44;
+        }
+
+        void drawTabButton (juce::TabBarButton& button, juce::Graphics& g, bool over, bool) override
+        {
+            const auto r = button.getActiveArea();
+            const bool front = button.isFrontTab();
+            g.setColour (front ? panel : (over ? raised : background.interpolatedWith (panel, 0.5f)));
+            g.fillRect (r);
+            g.setColour (front ? text : (over ? text.withAlpha (0.85f) : textDim));
+            g.setFont (heading (13.0f, 0.1f));
+            g.drawText (button.getButtonText().toUpperCase(), r, juce::Justification::centred);
+            if (front)
+            {
+                g.setColour (accent);
+                g.fillRect (r.withTop (r.getBottom() - 2));
+            }
+        }
+
+        void drawTabAreaBehindFrontButton (juce::TabbedButtonBar&, juce::Graphics& g, int w, int h) override
+        {
+            g.setColour (panelEdge);
+            g.fillRect (0, h - 1, w, 1);
+        }
+
+        //==============================================================================
+        // Dialogs (rename, confirm): the panel colour with a thin accent line across the top,
+        // a heading for the title, no icon.
+        juce::Font getAlertWindowTitleFont() override     { return heading (18.0f, 0.06f); }
+        juce::Font getAlertWindowMessageFont() override   { return juce::Font (juce::FontOptions (15.0f)); }
+        juce::Font getAlertWindowFont() override          { return juce::Font (juce::FontOptions (15.0f)); }
+        int getAlertWindowButtonHeight() override         { return 34; }
+
+        void drawAlertBox (juce::Graphics& g, juce::AlertWindow& alert, const juce::Rectangle<int>& textArea,
+                           juce::TextLayout& textLayout) override
+        {
+            auto r = alert.getLocalBounds();
+            g.fillAll (panel);
+            g.setColour (accent);
+            g.fillRect (r.removeFromTop (3));
+            g.setColour (panelEdge);
+            g.drawRect (alert.getLocalBounds(), 1);
+            textLayout.draw (g, textArea.toFloat().withTrimmedTop (4.0f));
+        }
+
         void drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height, bool vertical,
                             int thumbStart, int thumbSize, bool mouseOver, bool mouseDown) override
         {
