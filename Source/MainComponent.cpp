@@ -3,6 +3,7 @@
 #include "Theme.h"
 #include "GroupLayout.h"
 #include "CrashLog.h"   // last: it brings in windows.h
+#include "TitleBar.h"
 
 namespace
 {
@@ -66,6 +67,7 @@ namespace
             setResizable (editor->isResizable(), false);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
+            TitleBar::tint (*this);
         }
 
         void closeButtonPressed() override
@@ -245,7 +247,8 @@ MainComponent::MainComponent()
     addAndMakeVisible (setButton);
     addAndMakeVisible (settingsButton);
     setButton.onClick = [this] { showSetMenu(); };
-    settingsButton.onClick = [this] { showDeviceSettings(); };
+    settingsButton.onClick = [this] { showSettings(); };
+    settingsButton.setTooltip ("Audio device, theme, zoom and layout   (Ctrl ,)");
 
     addAndMakeVisible (fadeTimeLabel);
     addAndMakeVisible (fadeTimeSlider);
@@ -341,6 +344,13 @@ MainComponent::MainComponent()
     {
         loadSet (*LiveSet::makeDefault().toXml ({}), {});
     }
+
+    if (! props->getBoolValue ("welcomed"))
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)]
+        {
+            if (auto* self = safe.getComponent())
+                self->showWelcome();
+        });
 
     addAndMakeVisible (perfMeter);
     perfMeter.onReset = [this] { dropoutBase = deviceManager.getXRunCount(); lastDropouts = 0; lastDropoutMs = 0; };
@@ -448,18 +458,162 @@ void MainComponent::showDeviceSettings()
     lostDeviceName.clear();
     alertBanner.setMessage ({});
 
-    auto* selector = new juce::AudioDeviceSelectorComponent (deviceManager, 0, LiveSet::maxDeviceInputs, 0, 2,
-                                                             false, false, true, false);
-    selector->setSize (520, 420);
+    showSettings (0);
+}
+
+namespace
+{
+    // The Settings window: Audio (the device), Look (theme, zoom), Layout (how the page behaves).
+    class SettingsPanel : public juce::Component
+    {
+    public:
+        std::function<void (int)> onTheme;
+        std::function<void (float)> onZoom;
+        std::function<void (bool)> onRearrange, onDockFolded, onSamplesFolded;
+
+        SettingsPanel (juce::AudioDeviceManager& devices, int tab, float zoom, bool rearrange, bool dockFolded, bool samplesFolded)
+        {
+            addAndMakeVisible (tabs);
+            tabs.setTabBarDepth (34);
+            tabs.setOutline (0);
+
+            auto* audio = new juce::AudioDeviceSelectorComponent (devices, 0, LiveSet::maxDeviceInputs, 0, 2, false, false, true, false);
+            tabs.addTab ("Audio", Theme::panel, audio, true);
+
+            auto* look = new juce::Component();
+            look->addAndMakeVisible (themeLabel);
+            look->addAndMakeVisible (themeBox);
+            look->addAndMakeVisible (zoomLabel);
+            look->addAndMakeVisible (zoomSlider);
+            themeLabel.setText ("Theme", juce::dontSendNotification);
+            for (int i = 0; i < Theme::numPalettes; ++i)
+                themeBox.addItem (Theme::palettes[i].name, i + 1);
+            themeBox.setSelectedId (Theme::currentPalette + 1, juce::dontSendNotification);
+            themeBox.onChange = [this] { if (onTheme) onTheme (themeBox.getSelectedId() - 1); };
+            zoomLabel.setText ("Zoom", juce::dontSendNotification);
+            zoomSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+            zoomSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 24);
+            zoomSlider.setRange (60.0, 160.0, 10.0);
+            zoomSlider.setValue (juce::roundToInt (zoom * 100.0f), juce::dontSendNotification);
+            zoomSlider.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v)) + "%"; };
+            zoomSlider.onDragEnd = [this] { if (onZoom) onZoom ((float) zoomSlider.getValue() / 100.0f); };
+            zoomSlider.onValueChange = [this] { if (! zoomSlider.isMouseButtonDown() && onZoom) onZoom ((float) zoomSlider.getValue() / 100.0f); };
+            look->setComponentID ("look");
+            tabs.addTab ("Look", Theme::panel, look, true);
+
+            auto* layout = new juce::Component();
+            for (auto* t : { &rearrangeToggle, &dockToggle, &samplesToggle })
+                layout->addAndMakeVisible (t);
+            rearrangeToggle.setButtonText ("Rearrange groups to fit the window (off: keep the layout, scroll sideways)");
+            dockToggle.setButtonText ("Fold the LIVE dock away");
+            samplesToggle.setButtonText ("Fold the samples list away");
+            rearrangeToggle.setToggleState (rearrange, juce::dontSendNotification);
+            dockToggle.setToggleState (dockFolded, juce::dontSendNotification);
+            samplesToggle.setToggleState (samplesFolded, juce::dontSendNotification);
+            rearrangeToggle.onClick = [this] { if (onRearrange) onRearrange (rearrangeToggle.getToggleState()); };
+            dockToggle.onClick = [this] { if (onDockFolded) onDockFolded (dockToggle.getToggleState()); };
+            samplesToggle.onClick = [this] { if (onSamplesFolded) onSamplesFolded (samplesToggle.getToggleState()); };
+            layout->setComponentID ("layout");
+            tabs.addTab ("Layout", Theme::panel, layout, true);
+
+            tabs.setCurrentTabIndex (juce::jlimit (0, 2, tab), false);
+            setSize (560, 460);
+        }
+
+        void paint (juce::Graphics& g) override   { g.fillAll (Theme::panel); }
+
+        void resized() override
+        {
+            tabs.setBounds (getLocalBounds());
+
+            auto look = tabs.getLocalBounds().withTrimmedTop (tabs.getTabBarDepth()).reduced (24);
+            auto row = look.removeFromTop (30);
+            themeLabel.setBounds (row.removeFromLeft (80));
+            themeBox.setBounds (row.removeFromLeft (220));
+            look.removeFromTop (14);
+            row = look.removeFromTop (30);
+            zoomLabel.setBounds (row.removeFromLeft (80));
+            zoomSlider.setBounds (row.removeFromLeft (320));
+
+            auto layout = tabs.getLocalBounds().withTrimmedTop (tabs.getTabBarDepth()).reduced (24);
+            for (auto* t : { &rearrangeToggle, &dockToggle, &samplesToggle })
+            {
+                t->setBounds (layout.removeFromTop (30));
+                layout.removeFromTop (8);
+            }
+        }
+
+    private:
+        juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+        juce::Label themeLabel, zoomLabel;
+        juce::ComboBox themeBox;
+        juce::Slider zoomSlider;
+        juce::ToggleButton rearrangeToggle, dockToggle, samplesToggle;
+    };
+}
+
+void MainComponent::showHelp()
+{
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (new HelpView());
+    o.dialogTitle = "Airloom - Manual";
+    o.dialogBackgroundColour = Theme::panel;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = true;
+    if (auto* w = o.launchAsync())
+        TitleBar::tint (*w);
+}
+
+void MainComponent::showWelcome()
+{
+    auto* panel = new WelcomePanel();
+    juce::Component::SafePointer<WelcomePanel> safe (panel);
+    auto closeIt = [safe]
+    {
+        if (auto* p = safe.getComponent())
+            if (auto* w = p->findParentComponentOfClass<juce::DialogWindow>())
+                w->exitModalState (0);
+    };
+    panel->onAudio = [this, closeIt] { closeIt(); showSettings (0); };
+    panel->onManual = [this, closeIt] { closeIt(); showHelp(); };
+    panel->onClose = closeIt;
 
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (selector);
-    o.dialogTitle = "Audio Settings";
+    o.content.setOwned (panel);
+    o.dialogTitle = "Welcome";
     o.dialogBackgroundColour = Theme::panel;
     o.escapeKeyTriggersCloseButton = true;
     o.useNativeTitleBar = true;
     o.resizable = false;
-    o.launchAsync();
+    if (auto* w = o.launchAsync())
+        TitleBar::tint (*w);
+    settings.getUserSettings()->setValue ("welcomed", true);
+}
+
+void MainComponent::showSettings (int tab)
+{
+    auto* panel = new SettingsPanel (deviceManager, tab, juce::Desktop::getInstance().getGlobalScaleFactor(),
+                                     liveSet.layoutWidth == 0, liveDock.isFolded(), pool.isCollapsed());
+    panel->onTheme = [this] (int t) { setTheme (t); };
+    panel->onZoom = [this] (float z) { setZoom (z); };
+    panel->onRearrange = [this] (bool on) { setRearrangeToFit (on); };
+    panel->onDockFolded = [this] (bool fold) { setLiveDockFolded (fold); };
+    panel->onSamplesFolded = [this] (bool fold)
+    {
+        if (fold != pool.isCollapsed())
+            pool.onToggleCollapse();
+    };
+
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (panel);
+    o.dialogTitle = "Settings";
+    o.dialogBackgroundColour = Theme::panel;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
+    if (auto* w = o.launchAsync())
+        TitleBar::tint (*w);
 }
 
 void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
@@ -508,7 +662,7 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
     else
     {
         deviceStatus = lostDeviceName.isNotEmpty() ? lostDeviceName + " disconnected - waiting for it"
-                                                   : "No audio device - open Audio Settings";
+                                                   : "No audio device - open Settings > Audio";
     }
 
     // While waiting for a lost interface, keep it as the saved choice for next time.
@@ -735,11 +889,11 @@ void MainComponent::showSetMenu()
     m.addItem (12, "Undo   (Ctrl Z)", ! undoStack.empty());
     m.addItem (13, "Redo   (Ctrl Y)", ! redoStack.empty());
     m.addSeparator();
-    m.addItem (1, "New set");
-    m.addItem (2, "Open set...");
+    m.addItem (1, "New set   (Ctrl N)");
+    m.addItem (2, "Open set...   (Ctrl O)");
     m.addSeparator();
     m.addItem (3, saved ? juce::String ("Save set (it saves itself as you go)") : juce::String ("Save set"), saved);
-    m.addItem (4, "Save set as new folder...");
+    m.addItem (4, "Save set as new folder...   (Ctrl Shift S)");
     m.addItem (10, "Rename set...", saved);
 
     juce::PopupMenu recent;
@@ -760,6 +914,10 @@ void MainComponent::showSetMenu()
     m.addItem (7, "Zoom out   (Ctrl -)");
     m.addItem (8, "Actual size   (Ctrl 0)");
     m.addItem (14, "Rearrange groups to fit the window", true, liveSet.layoutWidth == 0);
+    m.addItem (15, "Settings...   (Ctrl ,)");
+    m.addSeparator();
+    m.addItem (16, "Manual   (F1)");
+    m.addItem (17, "Welcome screen");
 
     juce::PopupMenu themes;
     for (int i = 0; i < Theme::numPalettes; ++i)
@@ -774,6 +932,9 @@ void MainComponent::showSetMenu()
         if (r == 2) openSet();
         if (r == 10) renameSet();
         if (r == 12) undo();
+        if (r == 15) showSettings();
+        if (r == 16) showHelp();
+        if (r == 17) showWelcome();
         if (r == 14) setRearrangeToFit (liveSet.layoutWidth > 0);
         if (r == 13) redo();
         if (r == 11) liveSet.getFolder().getChildFile ("Backups").revealToUser();
@@ -2868,14 +3029,14 @@ void MainComponent::layoutLiveDock()
     for (int g = 0; g < liveGroupViews.size() && g < (int) liveSet.liveGroups.size(); ++g)
     {
         const auto& lg = liveSet.liveGroups[(size_t) g];
-        const auto size = LiveGroupView::preferredSize (liveGroupSize (g), 100000, lg.columns, lg.collapsed);
+        const auto size = LiveGroupView::preferredSize (liveGroupSize (g), 100000, lg.columns, lg.collapsed || liveDock.isFolded());
         liveGroupViews[g]->setSize (size.x, size.y);
         views.add (liveGroupViews[g]);
         (lg.instruments ? instruments : inputs) += liveGroupSize (g);
     }
     liveDock.setSummary ("Inputs " + juce::String (inputs) + "   -   Instruments " + juce::String (instruments));
 
-    if (liveDock.arrange (views) && ! liveDock.isFolded())
+    if (liveDock.arrange (views))
         resized();   // taller or shorter: the loops above make room
 }
 
@@ -2883,6 +3044,8 @@ void MainComponent::setLiveDockFolded (bool fold)
 {
     liveDock.setFolded (fold);
     settings.getUserSettings()->setValue ("liveDockFolded", fold);
+    updateLiveGroupViews();   // every group to tiles, or back as it was
+    layoutLiveDock();
     resized();
 }
 
@@ -2909,7 +3072,7 @@ void MainComponent::updateLiveGroupViews()
         }
 
         auto* view = liveGroupViews[g];
-        view->setCollapsed (lg.collapsed);
+        view->setCollapsed (lg.collapsed || liveDock.isFolded());   // a folded dock shows every group as tiles
         view->setStrips (members);
         view->setTiles (tiles);
         view->setContent (lg.name, Theme::rowColour (lg.colour), lg.fx.anyOn(), lg.columns > 0, lg.instruments);
@@ -4276,7 +4439,8 @@ void MainComponent::showPluginScanner()
     o.escapeKeyTriggersCloseButton = true;
     o.useNativeTitleBar = true;
     o.resizable = true;
-    o.launchAsync();
+    if (auto* w = o.launchAsync())
+        TitleBar::tint (*w);
 
     // First time: start scanning straight away.
     if (knownPlugins.getNumTypes() == 0)
@@ -5989,9 +6153,20 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         if (c == '=' || c == '+' || code == '=' || code == '+')  { setZoom (scale + 0.1f); return true; }
         if (c == '-' || code == '-')                             { setZoom (scale - 0.1f); return true; }
         if (c == '0' || code == '0')                             { setZoom (1.0f); return true; }
+        if ((code == 'S' || code == 's') && key.getModifiers().isShiftDown())   { saveSet (true); return true; }
+        if (code == 'S' || code == 's')                          { saveSet (! liveSet.file.existsAsFile()); return true; }
+        if (code == 'O' || code == 'o')                          { openSet(); return true; }
+        if (code == 'N' || code == 'n')                          { newSet(); return true; }
+        if (c == ',' || code == ',')                             { showSettings(); return true; }
         if ((code == 'Z' || code == 'z') && key.getModifiers().isShiftDown())   { redo(); return true; }
         if (code == 'Z' || code == 'z')                          { undo(); return true; }
         if (code == 'Y' || code == 'y')                          { redo(); return true; }
+    }
+
+    if (key == juce::KeyPress::F1Key)
+    {
+        showHelp();
+        return true;
     }
 
     if (key == juce::KeyPress::F11Key)

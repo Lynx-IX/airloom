@@ -13,7 +13,7 @@ public:
     PerformanceMeter()
     {
         setTooltip ("Audio CPU load and dropouts (clicks or gaps) since the last reset. Over about 70% or any "
-                    "dropouts: raise the buffer size in Audio Settings, or use fewer reverbs and plug-ins. Click to reset.");
+                    "dropouts: raise the buffer size in Settings > Audio, or use fewer reverbs and plug-ins. Click to reset.");
     }
 
     // 'cpu' is 0..1 (or more when overloaded); 'recentDropout' flashes the count red.

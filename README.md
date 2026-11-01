@@ -66,8 +66,8 @@ it's installed; writes a pass/fail report; can run while the app is open):
   a group's **right edge** to set how many columns its grid has (6 channels as 6x1, 3x2, 2x3...); double-click the
   edge to go back to automatic. The **<** button folds the
   samples list into a thin strip to give the groups more room (click the strip to open it again).
-- Each group is a layer, with its own volume fader, meter and mute on the left. A new set starts with Pads,
-  Ambient, Tones and One-shots. Click a group's name to rename it, recolour it, remove it, or add a channel.
+- Each group is a layer, with its own volume fader, meter and mute on the left. A new set starts with a
+  **Samples** group and a **Live Loops** group (where loops recorded with no key land). Click a group's name to rename it, recolour it, remove it, or add a channel.
   **+ GROUP** adds one (up to 8).
 - **Collapse a group** with the arrow by its name (or *Collapse* in its name menu; *Collapse all groups* /
   *Expand all groups* do every group). A collapsed group is a short bar: its name, MUTE and FX, and a tile per
@@ -126,9 +126,9 @@ it's installed; writes a pass/fail report; can run while the app is open):
 ## Live inputs and effects
 
 - **The LIVE dock:** interface inputs and hosted instruments sit in their own groups in a dock along the bottom, under
-  the loop groups and the samples list (the main area is for loops). The **v** button (or a click on its bar) folds it
-  to a thin bar that shows how many inputs and instruments there are; **^** brings it back - remembered on this
-  computer. Drag a group by its name to move it along the dock; wider than the window, the dock scrolls sideways.
+  the loop groups and the samples list (the main area is for loops). The **v** button (or a click on its bar) folds it:
+  every group becomes a short bar with a named tile for each input and instrument (click one to mute or unmute it),
+  so it takes little room but still shows what's there; **^** opens it again - remembered on this computer. Drag a group by its name to move it along the dock; wider than the window, the dock scrolls sideways.
 - **Live groups:** interface inputs and hosted instruments sit in their own groups.
   A new set has an **Inputs** group and an **Instruments** group; **+ GROUP** > *Input group* or *Instrument group*
   adds more (up to 8 live groups), e.g. "Synths" and "Drones". Like a loop group, each has a **fader**, meter,
@@ -178,7 +178,7 @@ it's installed; writes a pass/fail report; can run while the app is open):
   follow it live. Sample loops don't need it - they repeat at their own length - but Stage 5's loop recording will be
   able to snap to bars.
 - Right-click an input fader or mute to learn a MIDI control for it.
-- For live playing, latency matters: use the smallest buffer size that plays without crackles in Audio Settings, and
+- For live playing, latency matters: use the smallest buffer size that plays without crackles in Settings > Audio, and
   ideally the interface's ASIO driver (see Low latency below).
 
 ## Instruments (VST3)
@@ -288,7 +288,7 @@ eight - it takes the first interface input no other strip uses, or input 1 again
 mic through a second set of effects). Click an input's name to pick its source: any single
 interface input (**Mono input**), or two side by side as a **Stereo pair** (e.g. a synth or a stereo mic on 3+4).
 **Remove input** is in the same menu; MIDI assigned to later inputs moves down with them. Airloom opens every input
-on the interface (up to 16), so there's nothing to switch on in Audio Settings. Through Windows Audio, an interface
+on the interface (up to 16), so there's nothing to switch on in Settings > Audio. Through Windows Audio, an interface
 like the MOTU M Series or a Scarlett 2i2 shows Airloom just its first two inputs.
 
 ## Scenes
@@ -431,12 +431,12 @@ apart again over time, so press SYNC whenever they need it.
   MIDI button.
 - **CPU** (in the header) shows how hard the audio is working, and how many **dropouts** (clicks or gaps from the
   computer not keeping up) there have been. Amber over 70%, red over 90%; the dropout count flashes red when a new one
-  happens. Click it to reset the count. Fix: a bigger buffer in Audio Settings, or fewer reverbs and plug-ins (use
+  happens. Click it to reset the count. Fix: a bigger buffer in Settings > Audio, or fewer reverbs and plug-ins (use
   Space).
 - **Interface unplugged:** if the interface disappears (cable, power) or stops responding, a red banner says so and
   Airloom goes silent instead of switching to the computer's own speakers and mic (which could feed back). Plug it
   back in and it reconnects by itself with the same settings; loops carry on from where they stopped. Choosing a
-  device in Audio Settings instead ends the wait.
+  device in Settings > Audio instead ends the wait.
 
 ## Freeze
 
@@ -460,6 +460,14 @@ saved automatically, so the app reopens exactly where you left off.
   are and plug-ins stay loaded. Playing isn't undone: faders, mutes, starting and stopping loops, scene recalls, keys,
   octaves and tempo. Changes in quick succession (turning a knob) are one step. Adding or removing an input or
   instrument isn't undone (their settings are). Opening a set starts its own history.
+- **Finding things:** every channel, group and input or instrument strip has a small **...** button (top right)
+  that opens its options - the same menu as clicking its name or right-clicking it. **F1** (or Set > Manual) opens
+  this manual inside Airloom; Set > Welcome screen shows the first-run welcome again.
+- **Settings** (the header button, Set > Settings, or **Ctrl ,**) has three tabs: **Audio** (the interface, buffer
+  size, inputs), **Look** (theme and zoom) and **Layout** (rearranging groups to fit the window, folding the LIVE dock
+  and the samples list). The window remembers its size, place and whether it was maximised.
+- **Shortcuts:** Ctrl S save (Ctrl Shift S save as a new folder), Ctrl O open, Ctrl N new set, Ctrl Z / Ctrl Y undo and
+  redo, Ctrl + / Ctrl - / Ctrl 0 zoom, Ctrl , settings, F1 the manual, F11 stage view, Esc stop all (or cancel MIDI learn).
 - **Set > Rename set...** renames the set's file (its folder stays as it is); **Set > Open recent** lists the last 8.
 
 - **Set > Save set as new folder...** creates a folder and gathers every sample into it - one subfolder per group,

@@ -4,6 +4,7 @@
 #include "MainComponent.h"
 #include "Theme.h"
 #include "CrashLog.h"   // last: it brings in windows.h
+#include "TitleBar.h"
 
 class LiveRigApplication : public juce::JUCEApplication
 {
@@ -58,7 +59,7 @@ public:
         }
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         mainWindow = std::make_unique<MainWindow> (getApplicationName() + " - Audio Performance Rig");
-        Theme::onSwitched = [this] { if (mainWindow != nullptr) mainWindow->tintTitleBar(); };
+        Theme::onSwitched = [] { TitleBar::tintAll(); };
     }
 
     void shutdown() override
@@ -81,49 +82,34 @@ public:
             : DocumentWindow (name, Theme::background, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true);
+            auto* main = new MainComponent();
+            setContentOwned (main, true);
             setResizable (true, true);
             setResizeLimits (900, 560, 10000, 10000);
 
-            // Open large, but as a normal window that can be resized or maximised.
-            if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-                centreWithSize (juce::jmin (1440, display->userArea.getWidth() * 9 / 10),
-                                juce::jmin (960, display->userArea.getHeight() * 9 / 10));
-            else
-                centreWithSize (getWidth(), getHeight());
+            // Where it was last time (size, place, maximised); the first time, large in the middle.
+            if (! restoreWindowStateFromString (main->savedWindowState()))
+            {
+                if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+                    centreWithSize (juce::jmin (1440, display->userArea.getWidth() * 9 / 10),
+                                    juce::jmin (960, display->userArea.getHeight() * 9 / 10));
+                else
+                    centreWithSize (getWidth(), getHeight());
+            }
 
             setVisible (true);
+            if (main->savedWindowState().startsWith ("fs"))
+                setFullScreen (true);   // maximised again, now it's on screen
             tintTitleBar();
         }
 
-        // Windows draws the title bar; on Windows 11 it can take the theme's colours
-        // (a shade darker than the window), and on 10 it at least goes dark.
-        void tintTitleBar()
+        ~MainWindow() override
         {
-            auto* hwnd = (HWND) getWindowHandle();
-            if (hwnd == nullptr)
-                return;
-
-            using SetAttribute = HRESULT (WINAPI*) (HWND, DWORD, LPCVOID, DWORD);
-            static auto* setAttribute = []() -> SetAttribute
-            {
-                if (auto* dwm = LoadLibraryW (L"dwmapi.dll"))
-                    return (SetAttribute) GetProcAddress (dwm, "DwmSetWindowAttribute");
-                return nullptr;
-            }();
-            if (setAttribute == nullptr)
-                return;
-
-            auto colorRef = [] (juce::Colour c) { return (DWORD) RGB (c.getRed(), c.getGreen(), c.getBlue()); };
-            const auto caption = Theme::background.interpolatedWith (juce::Colours::black, 0.35f);
-            const BOOL dark = TRUE;
-            const DWORD captionColour = colorRef (caption), textColour = colorRef (Theme::text), borderColour = colorRef (Theme::panelEdge);
-
-            setAttribute (hwnd, 20, &dark, sizeof (dark));                         // DWMWA_USE_IMMERSIVE_DARK_MODE
-            setAttribute (hwnd, 35, &captionColour, sizeof (captionColour));       // DWMWA_CAPTION_COLOR
-            setAttribute (hwnd, 36, &textColour, sizeof (textColour));             // DWMWA_TEXT_COLOR
-            setAttribute (hwnd, 34, &borderColour, sizeof (borderColour));         // DWMWA_BORDER_COLOR
+            if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                main->rememberWindowState (getWindowStateAsString());
         }
+
+        void tintTitleBar()   { TitleBar::tint (*this); }
 
         void closeButtonPressed() override
         {

@@ -30,6 +30,31 @@ public:
     }
 };
 
+// A small "..." button: the options a right-click also opens, so they can be found.
+class DotsButton : public juce::Button
+{
+public:
+    DotsButton() : juce::Button ("Options")
+    {
+        setTooltip ("Options (or right-click)");
+        setWantsKeyboardFocus (false);
+    }
+
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        const auto r = getLocalBounds().toFloat();
+        if (over || down)
+        {
+            g.setColour (Theme::text.withAlpha (down ? 0.18f : 0.1f));
+            g.fillRoundedRectangle (r, 3.0f);
+        }
+        g.setColour (over ? Theme::text : Theme::textDim);
+        const float d = juce::jmin (3.0f, r.getHeight() * 0.22f), gap = d * 1.9f;
+        for (int i = -1; i <= 1; ++i)
+            g.fillEllipse (r.getCentreX() + (float) i * gap - d / 2.0f, r.getCentreY() - d / 2.0f, d, d);
+    }
+};
+
 // MUTE: on, it reads MUTED on a grey key rather than red (red is kept for recording and
 // emergencies); the strip it belongs to fades back (see ChannelStrip::isMutedShown).
 class MuteButton : public RightClickable<juce::TextButton>

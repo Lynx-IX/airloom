@@ -66,6 +66,8 @@ public:
         addAndMakeVisible (xfButton);
         addAndMakeVisible (fxButton);
         addAndMakeVisible (dubButton);
+        addAndMakeVisible (dotsButton);
+        dotsButton.onClick = [this] { if (onMenu) onMenu(); };
         addAndMakeVisible (volume);
         addAndMakeVisible (meter);
 
@@ -212,7 +214,8 @@ public:
             g.drawText (text, top.removeFromBottom (11), juce::Justification::centredRight);
         }
 
-        Theme::drawFittedName (g, label, top.reduced (2, 0), lit ? Theme::text : Theme::text.withAlpha (0.88f), 24.0f);
+        // Clear of the ... button in the corner (both sides, so the name stays centred).
+        Theme::drawFittedName (g, label, top.reduced (14, 0), lit ? Theme::text : Theme::text.withAlpha (0.88f), 24.0f);
     }
 
     void resized() override
@@ -225,6 +228,7 @@ public:
 
         auto area = getLocalBounds().reduced (5);
         nameArea = area.removeFromTop (38);
+        dotsButton.setBounds (getWidth() - 23, 3, 20, 14);
         area.removeFromTop (2);
 
         // PLAY and FX, then (loops only) a smaller DUB and XF underneath.
@@ -278,6 +282,7 @@ public:
 private:
     void updateVisibility()
     {
+        dotsButton.setVisible (! compact);
         const bool hasSample = state != State::empty && ! compact;
         playButton.setVisible (hasSample);
         xfButton.setVisible (hasSample && ! oneShot);
@@ -296,6 +301,7 @@ private:
     juce::Rectangle<int> nameArea;
 
     RightClickable<juce::TextButton> playButton { "PLAY" }, xfButton { "XF" }, dubButton { "DUB" };
+    DotsButton dotsButton;
     juce::TextButton fxButton { "FX" };
     RightClickable<juce::Slider> volume;
 };
@@ -328,6 +334,8 @@ public:
         addAndMakeVisible (strip);
         addAndMakeVisible (fxButton);
         addAndMakeVisible (addButton);
+        addAndMakeVisible (dotsButton);
+        dotsButton.onClick = [this] { if (onHeaderMenu) onHeaderMenu(); };
 
         fxButton.setTooltip ("Effects for everything in this group");
         fxButton.setWantsKeyboardFocus (false);
@@ -519,7 +527,7 @@ public:
 
         g.setColour (colour);
         g.setFont (Theme::heading (14.0f, 0.1f));
-        g.drawFittedText (name.toUpperCase(), nameArea.withLeft (arrowArea.getRight()).reduced (2, 0),
+        g.drawFittedText (name.toUpperCase(), nameArea.withLeft (arrowArea.getRight()).withTrimmedRight (24).reduced (2, 0),
                           juce::Justification::centredLeft, collapsed ? 1 : 2);
     }
 
@@ -548,6 +556,7 @@ public:
             strip.setBounds (header);
         }
         arrowArea = nameArea.withWidth (24);
+        dotsButton.setBounds (nameArea.getRight() - 24, nameArea.getY() + (collapsed ? 7 : 10), 22, 14);
 
         gridArea = area.reduced (padding);
         columns = juce::jmax (1, (gridArea.getWidth() + cardGap) / (cardWidth + cardGap));
@@ -641,5 +650,6 @@ private:
     juce::OwnedArray<ChannelCard> cards;
     juce::TextButton addButton { "+" };
     juce::TextButton fxButton { "FX" };
+    DotsButton dotsButton;
 };
 

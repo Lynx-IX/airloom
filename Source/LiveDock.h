@@ -5,8 +5,10 @@
 #include "Theme.h"
 
 // The LIVE dock along the bottom: the input and instrument groups side by side, under the loop
-// groups and the samples list. Folds to a thin bar (the button, or click the bar); wider than
-// the window, it scrolls sideways. Drag a group by its name to put it elsewhere in the row.
+// groups and the samples list. Folded (the button, or click the bar), every group shows as a
+// collapsed bar of named tiles - one per input or instrument - so it takes little room but still
+// says what's there; wider than the window, it scrolls sideways. Drag a group by its name to
+// put it elsewhere in the row.
 class LiveDock : public juce::Component
 {
 public:
@@ -32,7 +34,6 @@ public:
     void setFolded (bool shouldFold)
     {
         folded = shouldFold;
-        viewport.setVisible (! folded);
         foldButton.setButtonText (folded ? "^" : "v");
         foldButton.setTooltip (folded ? foldedTip : "Fold the inputs and instruments away");
         resized();
@@ -65,7 +66,7 @@ public:
         return changed;
     }
 
-    int preferredHeight() const   { return folded ? barHeight : juce::jmax (barHeight, contentHeight); }
+    int preferredHeight() const   { return juce::jmax (barHeight, contentHeight); }
 
     // The position in the row a group dropped at this point (dock coordinates) would take.
     int dropIndexAt (juce::Point<int> pos, const juce::Array<LiveGroupView*>& groups, const LiveGroupView* moving) const
@@ -88,7 +89,7 @@ public:
         g.drawText ("LIVE", bar, juce::Justification::centredLeft);
         g.setColour (Theme::textDim);
         g.setFont (juce::FontOptions (12.5f));
-        g.drawText (folded ? summary + "   -   click to show" : juce::String ("Inputs and instruments"),
+        g.drawText (folded ? summary + "   -   folded: click a name to mute it, ^ to open" : juce::String ("Inputs and instruments"),
                     bar.withTrimmedLeft (52).withTrimmedRight (36), juce::Justification::centredLeft);
     }
 

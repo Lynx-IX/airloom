@@ -30,6 +30,8 @@ public:
         firstButton.setTooltip (firstButtonTip);
         armButton.setTooltip ("Arm: feeds the looper when you press REC or DUB");
         firstButton.onClick = [this] { if (onFirstButton) onFirstButton(); };
+        addAndMakeVisible (dotsButton);
+        dotsButton.onClick = [this] { if (onMenu) onMenu(); };
         armButton.onClick = [this] { if (onArm) onArm(); };
         fxButton.onClick = [this] { if (onFx) onFx(); };
     }
@@ -98,6 +100,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (5);
+        dotsButton.setBounds (getWidth() - 25, 5, 20, 14);
         nameArea = area.removeFromTop (18);
         detailArea = area.removeFromTop (15);
         area.removeFromTop (3);
@@ -157,6 +160,7 @@ private:
     juce::Colour accent = Theme::accent;
     juce::Rectangle<int> nameArea, detailArea;
     juce::TextButton firstButton, armButton { "ARM" }, fxButton { "FX" };
+    DotsButton dotsButton;
     juce::OwnedArray<RightClickable<juce::TextButton>> choiceButtons;
 };
 

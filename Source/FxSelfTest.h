@@ -19,6 +19,7 @@
 #include "GroupLayout.h"
 #include "SampleEditor.h"
 #include "SamplePool.h"
+#include "Help.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
@@ -774,7 +775,7 @@ namespace FxSelfTest
             const auto staging = work.getChildFile ("staging");
             staging.createDirectory();
             LiveSet set = LiveSet::makeDefault();
-            set.rows[1].slots[0].file = sample;
+            set.rows[0].slots[0].file = sample;
             set.relocate ({ { sample.getFullPathName(), staging.getChildFile ("Ambient/Rain.wav") } });
             const auto xmlText = set.toXml (staging)->toString();
 
@@ -796,7 +797,7 @@ namespace FxSelfTest
             if (auto xml = juce::XmlDocument::parse (setFile))
                 opened.loadFromXml (*xml, setFile.getParentDirectory());
 
-            const auto found = opened.rows.size() > 1 ? opened.rows[1].slots[0].file : juce::File();
+            const auto found = ! opened.rows.empty() && ! opened.rows[0].slots.empty() ? opened.rows[0].slots[0].file : juce::File();
             check (found.existsAsFile() && found.loadFileAsString() == "pretend audio" && found.isAChildOf (elsewhere),
                    "Pack round trip: unpacked set finds its sample in its own folder (" + found.getRelativePathFrom (elsewhere) + ")");
             work.deleteRecursively();
@@ -2205,11 +2206,36 @@ namespace FxSelfTest
             auto renamed = base;  renamed.rows[0].name = "Drones";
             auto fx = base;       fx.rows[0].slots[0].fx.reverbOn = true;
             auto trimmed = base;  trimmed.rows[0].slots[0].shape.start = 0.5;
-            auto moved = base;    moved.rows[2].position = { 300, 40 };
+            auto moved = base;    moved.rows[1].position = { 300, 40 };
             const bool editsAre = text (renamed) != before && text (fx) != before && text (trimmed) != before && text (moved) != before;
 
             check (playingIsNotAnEdit && editsAre,
                    "Undo steps come from edits (names, effects, trims, layout), never from playing (faders, mutes, keys, tempo, scene mixes)");
+        }
+
+        // ---- The built-in manual and the welcome ----
+        {
+            const auto manual = juce::String::fromUTF8 (BinaryData::README_md, BinaryData::README_mdSize);
+            HelpView help;
+            help.setBounds (0, 0, 820, 760);
+            const auto helpImage = help.createComponentSnapshot ({ 0, 0, 820, 760 });
+            WelcomePanel welcome;
+            welcome.setBounds (0, 0, 620, 430);
+            const auto welcomeImage = welcome.createComponentSnapshot (welcome.getLocalBounds());
+
+            juce::Image both (juce::Image::ARGB, 820 + 620 + 20, 760, true);
+            {
+                juce::Graphics g (both);
+                g.fillAll (juce::Colours::black);
+                g.drawImageAt (helpImage, 0, 0);
+                g.drawImageAt (welcomeImage, 840, 0);
+            }
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-help.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (manual.contains ("Undo") && manual.contains ("LIVE dock") && out.openedOk()
+                   && juce::PNGImageFormat().writeImageToStream (both, out),
+                   "The manual is built in (F1) and the welcome screen draws - pictures in " + file.getFullPathName());
         }
 
         report.add ({});

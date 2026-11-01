@@ -94,16 +94,14 @@ void LiveSet::ensureLiveGroups()
 
 LiveSet LiveSet::makeDefault()
 {
+    // Nearly empty, for any kind of music: a group for samples, one for loops recorded live
+    // (recordings with no key land in "Live Loops" by name), and the Inputs and Instruments groups.
     LiveSet set;
     set.ensureLiveGroups();
-    set.rows.push_back (makeRow ("Pads", false));
-    set.rows.push_back (makeRow ("Ambient", false));
-    set.rows.push_back (makeRow ("Tones", false));
-    set.rows.push_back (makeRow ("One-shots", true));
-
-    for (size_t i = 0; i < set.rows.size(); ++i)
-        set.rows[i].colour = (int) i;   // violet, green, blue, amber
-
+    set.rows.push_back (makeRow ("Samples", false));
+    set.rows.push_back (makeRow ("Live Loops", false, 0));
+    set.rows[0].colour = 0;   // violet
+    set.rows[1].colour = 2;   // blue
     return set;
 }
 

@@ -26,6 +26,7 @@ public:
     int index = 0;
     ChannelStrip strip { {}, false };
     juce::TextButton fxButton { "FX" }, addButton { "+" };
+    DotsButton dotsButton;
     std::function<void()> onHeaderMenu, onFx, onAdd, onToggleCollapsed;
     std::function<void (int tile)> onTile;
     ColumnResizer resizer;          // its onColumnsChanged is set by the owner
@@ -36,6 +37,8 @@ public:
         addAndMakeVisible (strip);
         addAndMakeVisible (fxButton);
         addAndMakeVisible (addButton);
+        addAndMakeVisible (dotsButton);
+        dotsButton.onClick = [this] { if (onHeaderMenu) onHeaderMenu(); };
 
         fxButton.setTooltip ("Effects for everything in this group");
         fxButton.setWantsKeyboardFocus (false);
@@ -170,7 +173,7 @@ public:
 
         g.setColour (colour);
         g.setFont (Theme::heading (14.0f, 0.1f));
-        g.drawFittedText (name.toUpperCase(), nameArea.withLeft (arrowArea.getRight()).reduced (2, 0),
+        g.drawFittedText (name.toUpperCase(), nameArea.withLeft (arrowArea.getRight()).withTrimmedRight (24).reduced (2, 0),
                           juce::Justification::centredLeft, collapsed ? 1 : 2);
 
         if (collapsed)
@@ -254,6 +257,7 @@ public:
             strip.setBounds (header);
         }
         arrowArea = nameArea.withWidth (24);
+        dotsButton.setBounds (nameArea.getRight() - 24, nameArea.getY() + (collapsed ? 7 : 10), 22, 14);
 
         gridArea = area.reduced (padding);
         columns = juce::jmax (1, (gridArea.getWidth() + stripGap) / (stripWidth + stripGap));

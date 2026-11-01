@@ -10,6 +10,7 @@
 #include "LiveGroupView.h"
 #include "LiveDock.h"
 #include "SampleEditor.h"
+#include "Help.h"
 #include "LooperBar.h"
 #include "InstrumentChannel.h"
 #include "LiveSet.h"
@@ -43,6 +44,10 @@ public:
     // Where this computer's settings are kept (also read at startup for the theme).
     static juce::PropertiesFile::Options settingsOptions();
 
+    // The main window's size, place and maximised state, kept between runs.
+    juce::String savedWindowState()                       { return settings.getUserSettings()->getValue ("windowState"); }
+    void rememberWindowState (const juce::String& state)  { settings.getUserSettings()->setValue ("windowState", state); }
+
     void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override;
     void releaseResources() override;
@@ -67,6 +72,11 @@ private:
     // Audio device
     void openAudioDevice();
     void showDeviceSettings();
+
+    // The Settings window (Audio, Look, Layout); tab 0 is Audio.
+    void showSettings (int tab = 0);
+    void showHelp();
+    void showWelcome();
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
     // Watching the interface: if it's unplugged (or stops answering) Airloom closes the audio
@@ -519,7 +529,7 @@ private:
     SetRecorder setRecorder;
     void toggleSetRecording();
     void updateRecordSetButton();
-    juce::TextButton setButton { "Set" }, settingsButton { "Audio Settings" };
+    juce::TextButton setButton { "Set" }, settingsButton { "Settings" };
     juce::Slider fadeTimeSlider;
     juce::Label fadeTimeLabel { {}, "Fade time" };
     juce::Slider bpmSlider;

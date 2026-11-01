@@ -20,7 +20,7 @@ juce_add_gui_app(LiveRig
     VERSION ${PROJECT_VERSION})
 
 # The icon again, for the logo in the app's header.
-juce_add_binary_data(AirloomData SOURCES Resources/AppIcon.png)
+juce_add_binary_data(AirloomData SOURCES Resources/AppIcon.png README.md)   # the manual is built in (Help)
 
 juce_generate_juce_header(LiveRig)
 
