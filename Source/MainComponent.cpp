@@ -163,6 +163,10 @@ MainComponent::MainComponent()
         resized();
     };
 
+    addAndMakeVisible (liveDock);
+    liveDock.setFolded (props->getBoolValue ("liveDockFolded"));
+    liveDock.onToggleFold = [this] { setLiveDockFolded (! liveDock.isFolded()); };
+
     addAndMakeVisible (rowsViewport);
     rowsViewport.setViewedComponent (&rowsContent, false);
     rowsViewport.setScrollBarsShown (true, false);
@@ -2497,7 +2501,6 @@ std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, ju
     // Groups (row indices; live group g is -1 - g): see GroupLayout for the rules.
     const int width = groupPageWidth();
     const int rows = juce::jmin (rowViews.size(), (int) liveSet.rows.size());
-    const int lives = juce::jmin (liveGroupViews.size(), (int) liveSet.liveGroups.size());
 
     using Group = GroupLayout::Group;
     std::vector<Group> groups;
@@ -2514,8 +2517,6 @@ std::map<int, juce::Rectangle<int>> MainComponent::arrangeGroups (int moving, ju
         return RowView::preferredSize ((int) r.slots.size(), width, r.columns, r.collapsed && ! expanded);
     };
 
-    for (int g = 0; g < lives; ++g)
-        groups.push_back ({ -1 - g, liveSet.liveGroups[(size_t) g].position, sizeOf (-1 - g), sizeOf (-1 - g, true) });
     for (int i = 0; i < rows; ++i)
         groups.push_back ({ i, liveSet.rows[(size_t) i].position, sizeOf (i), sizeOf (i, true) });
 
@@ -2684,7 +2685,7 @@ void MainComponent::toggleLiveCollapsed (int g)
         return;
     liveSet.liveGroups[(size_t) g].collapsed = ! liveSet.liveGroups[(size_t) g].collapsed;
     updateLiveGroupViews();
-    layoutRows();
+    layoutLiveDock();
     saveSession();
 }
 
@@ -2779,7 +2780,7 @@ void MainComponent::rebuildLiveGroups()
 
         auto* view = liveGroupViews.add (new LiveGroupView());
         view->index = g;
-        rowsContent.addAndMakeVisible (view);
+        liveDock.content.addAndMakeVisible (view);
 
         const auto faderTarget = "live." + lg.uid + ".fader";
         const auto muteTarget = "live." + lg.uid + ".mute";
@@ -2847,7 +2848,7 @@ void MainComponent::rebuildLiveGroups()
             if (g < (int) liveSet.liveGroups.size())
             {
                 liveSet.liveGroups[(size_t) g].columns = columns;
-                layoutRows();
+                layoutLiveDock();
                 saveSession();
             }
         };
@@ -2856,7 +2857,33 @@ void MainComponent::rebuildLiveGroups()
 
     applyLiveRouting();
     updateLiveGroupViews();
-    layoutRows();
+    layoutLiveDock();
+}
+
+void MainComponent::layoutLiveDock()
+{
+    // Each group at its own size (one line of strips unless its grid was set), side by side.
+    juce::Array<LiveGroupView*> views;
+    int inputs = 0, instruments = 0;
+    for (int g = 0; g < liveGroupViews.size() && g < (int) liveSet.liveGroups.size(); ++g)
+    {
+        const auto& lg = liveSet.liveGroups[(size_t) g];
+        const auto size = LiveGroupView::preferredSize (liveGroupSize (g), 100000, lg.columns, lg.collapsed);
+        liveGroupViews[g]->setSize (size.x, size.y);
+        views.add (liveGroupViews[g]);
+        (lg.instruments ? instruments : inputs) += liveGroupSize (g);
+    }
+    liveDock.setSummary ("Inputs " + juce::String (inputs) + "   -   Instruments " + juce::String (instruments));
+
+    if (liveDock.arrange (views) && ! liveDock.isFolded())
+        resized();   // taller or shorter: the loops above make room
+}
+
+void MainComponent::setLiveDockFolded (bool fold)
+{
+    liveDock.setFolded (fold);
+    settings.getUserSettings()->setValue ("liveDockFolded", fold);
+    resized();
 }
 
 void MainComponent::updateLiveGroupViews()
@@ -2890,6 +2917,7 @@ void MainComponent::updateLiveGroupViews()
         view->addButton.setEnabled (lg.instruments ? (int) liveSet.instruments.size() < LiveSet::maxInstruments
                                                    : (int) liveSet.inputs.size() < LiveSet::maxInputs);
     }
+    layoutLiveDock();   // a group with more or fewer strips is wider or narrower
 }
 
 void MainComponent::setLiveGroupMuted (int g, bool muted)
@@ -6045,6 +6073,10 @@ void MainComponent::clearDropMarkers()
 
 void MainComponent::itemDragMove (const SourceDetails& details)
 {
+    // A live group moves within the dock (dropped there); no outline in the loop area.
+    if (details.description.toString().startsWith (LiveGroupView::dragPrefix))
+        return;
+
     // A group being moved: show which side of the group underneath it would land.
     if (details.description.toString().startsWith (RowView::dragPrefix))
     {
@@ -6085,6 +6117,30 @@ void MainComponent::itemDropped (const SourceDetails& details)
 {
     clearDropMarkers();
     const auto text = details.description.toString();
+
+    if (text.startsWith (LiveGroupView::dragPrefix))
+    {
+        // Into the dock's row at the place it was dropped.
+        const int from = text.fromFirstOccurrenceOf (LiveGroupView::dragPrefix, false, false).getIntValue();
+        const auto inDock = liveDock.getLocalPoint (this, details.localPosition);
+        if (! liveDock.getLocalBounds().contains (inDock) || ! juce::isPositiveAndBelow (from, (int) liveSet.liveGroups.size()))
+            return;
+
+        juce::Array<LiveGroupView*> views;
+        for (auto* v : liveGroupViews)
+            views.add (v);
+        const int to = juce::jlimit (0, (int) liveSet.liveGroups.size() - 1,
+                                     liveDock.dropIndexAt (inDock, views, from < liveGroupViews.size() ? liveGroupViews[from] : nullptr));
+        if (to != from)
+        {
+            auto moving = liveSet.liveGroups[(size_t) from];
+            liveSet.liveGroups.erase (liveSet.liveGroups.begin() + from);
+            liveSet.liveGroups.insert (liveSet.liveGroups.begin() + to, moving);
+            rebuildLiveGroups();
+            saveSession();
+        }
+        return;
+    }
 
     if (text.startsWith (RowView::dragPrefix))
     {
@@ -7296,9 +7352,6 @@ void MainComponent::resized()
     stageArea = area;
     stageView.setBounds (stageArea);
 
-    pool.setBounds (area.removeFromLeft (pool.isCollapsed() ? SamplePool::collapsedWidth : 260));
-    area.removeFromLeft (16);
-
     {
         // MUTE OUT sits under the master fader.
         auto masterColumn = area.removeFromRight (110);
@@ -7306,13 +7359,20 @@ void MainComponent::resized()
         masterColumn.removeFromBottom (8);
         masterStrip.setBounds (masterColumn);
     }
+    area.removeFromRight (16);
+
+    // The LIVE dock along the bottom, under the loops and the samples (never more than half the height).
+    liveDock.setBounds (area.removeFromBottom (juce::jmin (liveDock.preferredHeight(), area.getHeight() / 2)));
+    area.removeFromBottom (10);
+
+    pool.setBounds (area.removeFromLeft (pool.isCollapsed() ? SamplePool::collapsedWidth : 260));
+    area.removeFromLeft (16);
     {
         // SPACE and FX sit where the master's (hidden) mute button would be.
         auto buttons = masterStrip.muteButton.getBounds() + masterStrip.getPosition();
         spaceButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 2));
         masterFxButton.setBounds (buttons.withTrimmedLeft (4));
     }
-    area.removeFromRight (16);
 
     sceneBar.setBounds (area.removeFromTop (36));
     area.removeFromTop (10);

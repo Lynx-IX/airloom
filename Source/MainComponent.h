@@ -8,6 +8,7 @@
 #include "InputsView.h"
 #include "LiveGroupBus.h"
 #include "LiveGroupView.h"
+#include "LiveDock.h"
 #include "SampleEditor.h"
 #include "LooperBar.h"
 #include "InstrumentChannel.h"
@@ -502,6 +503,9 @@ private:
     LooperBar looperBar;
     juce::OwnedArray<RowView> rowViews;
     juce::OwnedArray<LiveGroupView> liveGroupViews;
+    LiveDock liveDock;   // the inputs' and instruments' groups, along the bottom
+    void layoutLiveDock();
+    void setLiveDockFolded (bool fold);
     juce::TextButton addRowButton { "+ GROUP" };
     ChannelStrip masterStrip { "Master", false };
     RightClickable<juce::TextButton> stopAllButton { "STOP ALL" };

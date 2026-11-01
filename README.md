@@ -125,7 +125,11 @@ it's installed; writes a pass/fail report; can run while the app is open):
 
 ## Live inputs and effects
 
-- **Live groups:** interface inputs and hosted instruments sit in their own groups, laid out among the loop groups.
+- **The LIVE dock:** interface inputs and hosted instruments sit in their own groups in a dock along the bottom, under
+  the loop groups and the samples list (the main area is for loops). The **v** button (or a click on its bar) folds it
+  to a thin bar that shows how many inputs and instruments there are; **^** brings it back - remembered on this
+  computer. Drag a group by its name to move it along the dock; wider than the window, the dock scrolls sideways.
+- **Live groups:** interface inputs and hosted instruments sit in their own groups.
   A new set has an **Inputs** group and an **Instruments** group; **+ GROUP** > *Input group* or *Instrument group*
   adds more (up to 8 live groups), e.g. "Synths" and "Drones". Like a loop group, each has a **fader**, meter,
   **MUTE** and **FX** on its left that act on everything in it (Space sends included), and **+** to add an input or
