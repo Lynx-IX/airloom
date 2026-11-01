@@ -3228,7 +3228,7 @@ void MainComponent::addRow (std::function<void (int)> then)
 {
     if ((int) liveSet.rows.size() >= LiveSet::maxRows)
     {
-        errorMessage = "Up to " + juce::String (LiveSet::maxRows) + " groups, one per MidiMix fader";
+        errorMessage = "Up to " + juce::String (LiveSet::maxRows) + " groups - remove one to add another";
         repaint();
         return;
     }
@@ -4171,7 +4171,7 @@ void MainComponent::loadInstrumentPlugin (int i, const juce::PluginDescription& 
             self->presetNames[(size_t) i].clear();
             self->applyInstrument (i);
             self->refreshPresetName (i);
-            self->infoMessage = name + " ready - play it from the Fire's pads or any keyboard";
+            self->infoMessage = name + (self->fireOutputs.empty() ? " ready - play it from any keyboard" : " ready - play it from the Fire's pads or any keyboard");
             self->saveSession();
             self->repaint();
         });
@@ -4277,7 +4277,7 @@ void MainComponent::showInstrumentMenu (int i)
 
     // Where its notes come from.
     juce::PopupMenu midiFrom;
-    midiFrom.addItem (10, "All keyboards and the Fire", true, inst.midiSource.isEmpty());
+    midiFrom.addItem (10, fireOutputs.empty() ? "All keyboards" : "All keyboards and the Fire", true, inst.midiSource.isEmpty());
     juce::Array<juce::MidiDeviceInfo> devices;
     for (auto& d : juce::MidiInput::getAvailableDevices())
         if (! d.name.removeCharacters (" ").containsIgnoreCase ("MIDIMix"))
@@ -4817,7 +4817,7 @@ void MainComponent::collectFinishedTake()
     const int rowIndex = findOrCreateLiveLoopsRow();
     if (rowIndex < 0)
     {
-        errorMessage = "No room for a loops group (8 groups max, one per MidiMix fader) - remove one to record";
+        errorMessage = "No room for a loops group (" + juce::String (LiveSet::maxRows) + " groups max) - remove one to record";
         return;
     }
 
@@ -6847,7 +6847,7 @@ void MainComponent::showLearnMenu (const juce::String& target, const juce::Strin
         if (r == 2) { midiMap.clear (target); saveMidiMap(); }
         if (r == 3)
         {
-            askChoice ("Clear all MIDI", "Remove every MIDI assignment? The MidiMix master fader and first two REC ARM buttons go back to their defaults.",
+            askChoice ("Clear all MIDI", "Remove every MIDI assignment? Controllers Airloom knows (see the manual) get their ready-made assignments back.",
                        { "Clear", "Cancel" }, [this] (int c)
                        {
                            if (c != 1) return;

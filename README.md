@@ -2,8 +2,7 @@
 
 An instrument for live, looping, ambient performance on Windows: play loops and samples in
 groups, record new loops from a mic or plug-in instruments in time, shape everything with effects,
-and move between scenes - from the screen, a MIDI controller (an Akai MidiMix or Fire, or any
-other) or both. Free and open source.
+and move between scenes - from the screen, any MIDI keyboard or controller, or both. Free and open source.
 
 ![Airloom: groups of loops and samples, scenes along the top, live inputs and instruments in the dock below](docs/screenshot.png)
 
@@ -97,7 +96,7 @@ VST3 SDK (MIT). VST is a registered trademark of Steinberg Media Technologies Gm
 - **Collapse a group** with the arrow by its name (or *Collapse* in its name menu; *Collapse all groups* /
   *Expand all groups* do every group). A collapsed group is a short bar: its name, MUTE and FX, and a tile per
   channel that lights while it plays - click a tile to play or stop it, right-click for its menu. The group fader
-  and MidiMix keep working. The set remembers which groups are collapsed. Input and instrument groups collapse the
+  and its MIDI control keep working. The set remembers which groups are collapsed. Input and instrument groups collapse the
   same way: each strip becomes a tile, lit while it's live (unmuted, and for an input, monitored) - click a tile to
   mute or unmute that strip.
 - **Channels** each hold one sample with its own volume. Drag samples from the panel (or straight from Explorer) onto
@@ -185,9 +184,9 @@ VST3 SDK (MIT). VST is a registered trademark of Steinberg Media Technologies Gm
     **movement** (slow modulation for a shimmering tail) and mix
   Each has its own on/off switch; double-click any knob to reset it. The Mic starts with low cut and reverb on.
 - **Plug-in effect on an input** (auto-tune, vocoder, anything VST3): click the input's name > *Plug-in effect* and
-  pick one - e.g. **Graillon 3** for pitch correction, from gentle to hard robotic auto-tune. It runs first, before
-  the built-in chain. *Open ...* in the same menu shows its window (set its key there to match the flute: A minor,
-  Bb or E). It's saved with the set, included in recordings made with effects and left out of dry ones. The input
+  pick one - e.g. a pitch-correction plug-in, from gentle to hard robotic auto-tune. It runs first, before
+  the built-in chain. *Open ...* in the same menu shows its window (set its key there to match what
+  you're playing). It's saved with the set, included in recordings made with effects and left out of dry ones. The input
   shows the plug-in's name under its own.
 - **Every group has an FX button too**, with the same chain applied to everything playing in that group (before the
   group fader). The FX button lights in the group's colour when any effect is on. Reverb and delay tails ring out after a
@@ -215,23 +214,8 @@ Hosted instruments sit in instrument groups (up to 8 instruments in a set).
   and skipped next time. Rescan any time from an instrument's menu > *Scan for plug-ins*.
 - Each instrument strip has **EDIT** (the plug-in's own window), **ARM** (record it into the looper, with or
   without its effects), **FX** (the same effects chain as everything else), a fader, meter and mute.
-- **Playing it:** every keyboard plays it (e.g. the MPK mini), plus the **Akai Fire's pads**, which become a scale
-  keyboard: left to right walks the scale, each row up starts three scale steps higher.
-  - **Any key** is where a new instrument starts: the pads play every note (chromatic from C, rows a fourth apart,
-    the Cs lit). Keyboards always play every note; keys only shape the Fire's pads.
-  - To play in a key, pick it from the instrument's menu > *Fire pads* > **Key** and **Scale** (minor or major
-    pentatonic, natural minor, major, Dorian, Hijaz, chromatic), and the **Octave**. The pads light up: root notes in
-    teal, the other scale notes dim. *Any key* at the top of the Key menu goes back to every note.
-  - **Key buttons:** *Fire pads* > **Add key button** puts the instrument's key on a row of one-click buttons shown on
-    every instrument strip (up to 5); the active one lights up. Right-click a button to remove it. The buttons belong to
-    the set: a new set has none (and no row), and sets from before keep the flute keys **A min**, **Bb maj**, **E maj**.
-  - Scenes remember each instrument's key, scale, octave - and Any key. **GRID <** / **GRID >** on the Fire move the instruments it plays down / up an
-  octave (octaves 1-6; with SHIFT held they pick the light-show pattern instead). The Fire's **VOLUME knob** (top left) turns
-  the faders of the instruments it plays up or down together, all by the same dB, so the balance you set between
-  them on screen stays the same (half a dB a click, faster below -30 dB). Turned all the way down, the quieter ones
-  wait at off and come back in at their own levels on the way up. Moving a fader yourself sets a new balance. The Fire's other buttons stay free
-  for MIDI-learn (e.g. REC), and a GRID button given a MIDI-learn job does that job instead. The MidiMix never
-  plays notes.
+- **Playing it:** every MIDI keyboard plays it, on every note. With an Akai Fire, its pads play it too, as a scale
+  keyboard - see *Akai Fire* under *Controllers with extra support*.
 - **Preset names:** an instrument's strip is titled with the **preset loaded in it** (e.g. "Flume Pad"), with the
   plug-in's name moving to the line under it. Airloom reads it from the settings the plug-in saves - it works for
   Vital and Zyklop (and plug-ins that save a preset name the same way); Serum 2 and Analog Lab don't say, so they show
@@ -239,13 +223,8 @@ Hosted instruments sit in instrument groups (up to 8 instruments in a set).
 - **Rename...** (in its menu) gives an instrument your own name instead - shown on its strip, in the stage view and
   everywhere else, saved with the set. *Name it after its preset* (or *Use the plug-in's name*) goes back, and
   changing the instrument clears it.
-- *Play from* (in its menu) limits an instrument to one controller, e.g. the Fire for a pad and the MPK for a lead.
-  With **two Fires** (Windows lists the second as "2 - FL STUDIO FIRE") set each instrument to its own Fire to split
-  them: each Fire then plays only its instrument and lights its pads in that instrument's key. An instrument left on
-  *All keyboards and the Fire* is played by both. Airloom knows each Fire by the **USB port** it's plugged into, so
-  unplugging and replugging is fine even though Windows renames it ("3 - FL STUDIO FIRE"). Plugged into a different
-  port, a Fire is taken to be the one no other instrument is using (the instrument's line shows "unplugged" for its
-  old one); pick it again in *Play from* to make that its port.
+- *Play from* (in its menu) limits an instrument to one controller, e.g. one keyboard for a pad and another for a
+  lead.
 - The plug-in and all its settings are saved with the set and reload when you open it. Instruments also receive the
   set's BPM, so their own synced delays and arpeggiators follow TAP.
 
@@ -253,10 +232,10 @@ Hosted instruments sit in instrument groups (up to 8 instruments in a set).
 
 The looper controls (REC, DUB, UNDO, loop length and status) sit in the middle of the bottom bar.
 
-1. **ARM** the input(s) you want to record (the MidiMix's first two REC ARM buttons do the same and light up).
+1. **ARM** the input(s) you want to record (or press a MIDI button assigned to ARM).
 2. Press **REC** and play. The status shows the time.
 3. Press **STOP** (the same button). The loop starts playing immediately, in time, as a new channel with its own
-   fader, XF, effects and so on. Loops are grouped and named by the key the Fire is set to: the first loop in Bb
+   fader, XF, effects and so on. Loops are grouped and named by the recording instrument's key (its menu > *Fire pads* > Key): the first loop in Bb
    major is **Loop Bb major 1** in a **Loops Bb major** group (created automatically, at the bottom); with no
    instrument key they go into **Live Loops**. If all 8 groups are taken, new keys share an existing loops group.
    **Several armed sources** (e.g. two instruments, or an instrument and the mic) record at once, **each onto its own
@@ -313,14 +292,14 @@ eight - it takes the first interface input no other strip uses, or input 1 again
 mic through a second set of effects). Click an input's name to pick its source: any single
 interface input (**Mono input**), or two side by side as a **Stereo pair** (e.g. a synth or a stereo mic on 3+4).
 **Remove input** is in the same menu; MIDI assigned to later inputs moves down with them. Airloom opens every input
-on the interface (up to 16), so there's nothing to switch on in Settings > Audio. Through Windows Audio, an interface
-like the MOTU M Series or a Scarlett 2i2 shows Airloom just its first two inputs.
+on the interface (up to 16), so there's nothing to switch on in Settings > Audio. Through Windows Audio, many interfaces
+show Airloom just their first two inputs.
 
 ## Scenes
 
 A **scene** is a saved mix: which loops are playing; every channel's level; every group's, input's and instrument's
-fader and mute; and each instrument's key (scale and octave) - the key changes the moment the scene is pressed, and
-the Fire's pads relight. Mutes fade over the morph rather than cutting, so muting one instrument and unmuting another
+fader and mute; and each instrument's key (scale and octave) - the key changes the moment the scene is pressed (and
+an Akai Fire's pads relight). Mutes fade over the morph rather than cutting, so muting one instrument and unmuting another
 in the next scene crossfades from one voice to the other. Scenes also keep **effects** - every channel's, group's,
 input's and instrument's - and morph to them: knobs glide over the morph time, and an effect switched on or off comes
 or goes with its mix fading, so reverbs and delays arrive and leave smoothly. Scenes made before effects were kept
@@ -352,43 +331,18 @@ strip above the groups holds them. Set up a mix and press **+ SCENE** to save it
 The bottom bar (looper, tempo, SYNC, STOP ALL) and the count-in stay as they are. Press **MIXER** (or F11) to go back;
 Airloom remembers which view you were in. Right-click STAGE to put it on a MIDI button.
 
-## Fire light show
-
-A Fire's pads can show a light show driven by what's going to the speakers. On the Fire, **hold SHIFT** and press:
-
-| Button | Does |
-| --- | --- |
-| **ALT** | Light show on / off (back to the key lights). Remembers the last pattern and colours. |
-| **GRID >** / **GRID <** | Next / previous pattern (switches it on) |
-| **PATTERN up** / **down** | Next / previous colour palette |
-| **BROWSER** | Join the two Fires into one display: steps this Fire through *on its own -> left -> right -> top -> below* |
-
-Patterns: **Spectrum** (bars, lows on the left), **Mirror** (lows in the middle, bars growing up and down),
-**Glow** (slow colour waves), **Plasma** (flowing colour field), **Waves** (two lines snaking across - lows and
-highs), **Bursts** (rings bursting out on each beat, or each new sound when nothing's in time), **Kaleidoscope**
-(spokes turning round the centre), **Diamonds** (diamond rings flowing out, a bright one on the beat), **Stars**
-(twinkles where the music is loud). Palettes: Ambient, Aurora, Ember, Ocean, Rainbow, Moon.
-
-Everything moves faster and brighter as the music fills out, and adjusts to the level so quiet passages still show.
-Each Fire has its own setting; the pads keep playing their instrument. The status line shows the pattern and palette.
-
-**Two Fires as one display:** press SHIFT + BROWSER on a Fire to say where it sits - left, right, top or below - and
-the other Fire takes the opposite place. They then show one picture across both: 32 x 4 side by side, or 16 x 8
-stacked (bars twice as tall). Waves, bursts and rings travel from one into the other, and a pattern or palette change
-on either changes both. Keep pressing to go back to *on its own*. The positions are remembered for each Fire's USB port.
-
 ## Time signature
 
 Click the **beat lights** (bottom bar; the signature shows beside them) to choose 2/4, 3/4, 4/4, 5/4, 6/8 or 7/8.
 Everything that counts bars follows it: the beat lights, Start on the bar, count-ins, Snap to bars, the first loop
-setting the tempo, synced "1 bar" delays and the Fire's PLAY light. In 6/8 and 7/8 the BPM counts eighth notes
+setting the tempo, synced "1 bar" delays and an Akai Fire's PLAY light. In 6/8 and 7/8 the BPM counts eighth notes
 (plug-ins are given the matching quarter-note tempo). It's saved with the set.
 
 ## Recording in time
 
 With **Start** on *beat* or *bar*, REC doesn't start straight away: it counts you in to the next bar line at least a
 beat away (with nothing playing, one whole bar from the press). The beat lights go red and count the bar, the looper
-says how many beats are left, and the Fire's REC button blinks - start playing on the next 1. The count also shows
+says how many beats are left (an Akai Fire's REC button blinks too) - start playing on the next 1. The count also shows
 **big in the middle of the window** (1, 2, 3, 4 - the last one red, "play on the next 1"), then **REC** for the first
 beat of the recording. Press REC again during
 the count-in to call it off. Recordings then start exactly on the bar, allowing for the interface's delay, so they
@@ -398,9 +352,6 @@ The **first loop** you record in *Free length* with nothing else playing sets th
 fits a whole number of bars into it (the nearest to the BPM you had), and the beat grid starts with it. Everything
 after - Start on the bar, Snap to bars, synced delays, SYNC - then follows what you actually played.
 
-The Fire's **PLAY** button is a beat light while loops are playing or you're recording: green on beat 1, yellow on
-the others.
-
 ## Effects
 
 Every input, instrument, group and channel has an **FX** panel. Tick a section (or turn one of its knobs) to switch it
@@ -408,13 +359,13 @@ on; double-click a knob to reset it. In order through the chain:
 
 - **Channel** - gain, pan, and **Space**: how much goes to the shared Space reverb (see below).
 - **Gate** - silences what's under the threshold (hiss, room noise).
-- **Swell** - fades each note in, like a volume pedal, so the breath at the start of a flute note blooms in like a bowed
+- **Swell** - fades each note in, like a volume pedal, so the breath or attack at the start of a note blooms in like a bowed
   string. A gap below the threshold resets it for the next note.
 - **Low cut**, **EQ**, **Compressor**.
 - **Tape** - soft saturation (Drive), a slow pitch wobble (Wow) and rolled-off highs (Tone): a worn, older sound.
 - **Filter** - a resonant low-pass (or high-pass) for building up and pulling back; with a **Sweep rate** it moves by
-  itself, **Sweep depth** octaves either side. Best on a MidiMix knob (below).
-- **Octave** - adds a copy an octave down or up, a fifth up or down, or two octaves down, for a bigger sound from one flute.
+  itself, **Sweep depth** octaves either side. Best on a controller knob (below).
+- **Octave** - adds a copy an octave down or up, a fifth up or down, or two octaves down, for a bigger sound from one instrument.
 - **Chorus** - gentle detuned doubling that widens and thickens.
 - **Motion** - stereo **Width** (0 = mono, 200% = extra wide) and a slow **auto-pan** drifting the sound around.
 - **Delay** - synced to the BPM or free, ping-pong.
@@ -431,7 +382,7 @@ return level; it's saved with the set.
 (**FX** under the master fader) - any VST3 effect, e.g. a Valhalla reverb on a whole loops group. A group's plug-in comes
 after its built-in effects. Their settings are saved with the set.
 
-**MIDI on knobs**: right-click any effect knob > Learn MIDI control, then turn a MidiMix knob. Moving it switches its
+**MIDI on knobs**: right-click any effect knob > Learn MIDI control, then turn a knob on your controller. Moving it switches its
 section on, and an open panel follows along. Knobs on groups, channels and Space are saved with the set; knobs on
 inputs and instruments belong to the computer, like their faders.
 
@@ -448,7 +399,7 @@ apart again over time, so press SYNC whenever they need it.
 
 - **CUED:** with **Start** on *beat* or *bar*, a loop you press waits for its moment - its PLAY button blinks amber and
   says **CUED** until it comes in (press again to cancel). Stopping one waits for the beat too: it blinks in its
-  colour until it stops. A MidiMix play button with a light blinks the same way, so you can tell without looking at
+  colour until it stops. A controller button that can light up blinks the same way, so you can tell without looking at
   the screen.
 - **MUTE OUT** (under the master fader) silences the speakers instantly - for emergencies like feedback. Unlike
   STOP ALL and Esc (musical fades) everything keeps running underneath, so pressing it again brings the sound
@@ -508,13 +459,14 @@ saved automatically, so the app reopens exactly where you left off.
 - **Moving to another computer:** **Set > Export set as one file...** packs the set and every sample it uses (live-loop
   recordings included) into a single `.liverigpack` - copy it on a USB stick or cloud drive. On the other computer,
   **Set > Open set...** and pick the pack: it unpacks into `Music\Airloom Sets\<name>` and opens, ready to play.
-  Plug-ins (Vital, Serum, Graillon...) can't travel in the pack - they need installing on each computer, often with a
+  Plug-ins (instruments and effects) can't travel in the pack - they need installing on each computer, often with a
   licence - so the pack includes **Plug-ins needed.txt** listing what to install; their settings are in the set and
   come back once they're installed.
 
-## MIDI (MidiMix or any controller)
+## MIDI controllers
 
-Nothing on a set is assigned automatically: **right-click a control and choose Learn MIDI control**, then move or
+Airloom works with any MIDI keyboard or controller. Keyboards play the instruments (every note, from any
+keyboard, unless *Play from* says otherwise). Anything else is yours to assign - nothing on a set is assigned automatically: **right-click a control and choose Learn MIDI control**, then move or
 press the hardware control. Learnable controls:
 
 - each channel's **PLAY/STOP**, **XF** and **volume** (a MIDI tag appears on the channel once it has any)
@@ -522,15 +474,79 @@ press the hardware control. Learnable controls:
 - master fader, inputs and instruments (faders, mutes, ARM), REC / DUB / UNDO, STOP ALL, MUTE OUT, TAP, SYNC, FREEZE, REC SET
 
 Channel and group assignments are **saved with the set** (and travel in an exported pack), and follow the channel or
-group wherever it's moved. The rest belong to the computer. Out of the box only the MidiMix **master fader**, its
-first two **REC ARM** buttons (arm inputs 1-2) and the **Fire's REC button** (records a loop, like REC) are assigned.
-MidiMix buttons light up: a group's mute while the group is on, a channel's play button while it plays, REC ARM while
-armed. The Fire's REC button glows dim red when ready, bright red while recording and amber while overdubbing.
+group wherever it's moved. The rest belong to the computer. Out of the box nothing is assigned, except on the
+controllers below. Buttons that can light up on a controller show their state: a group's mute while the group is on,
+a channel's play button while it plays (blinking while it's cued), an ARM button while armed.
 
 Faders and knobs use **soft takeover**: a hardware control only grabs the on-screen one once it passes its position,
 so nothing jumps. On group and master faders an amber tick shows where the hardware is until then.
 
 Right-click any learnable control to clear its assignment, or to clear all MIDI assignments.
+
+## Controllers with extra support
+
+Some controllers get more than MIDI-learn when they're plugged in. Without them, none of this shows up.
+
+### Akai Fire
+
+- **Pads:** the Fire's pads play its instruments as a scale keyboard: left to right walks the scale, each row up starts three scale steps higher.
+  - **Any key** is where a new instrument starts: the pads play every note (chromatic from C, rows a fourth apart,
+    the Cs lit). Keyboards always play every note; keys only shape the Fire's pads.
+  - To play in a key, pick it from the instrument's menu > *Fire pads* > **Key** and **Scale** (minor or major
+    pentatonic, natural minor, major, Dorian, Hijaz, chromatic), and the **Octave**. The pads light up: root notes in
+    teal, the other scale notes dim. *Any key* at the top of the Key menu goes back to every note.
+  - **Key buttons:** *Fire pads* > **Add key button** puts the instrument's key on a row of one-click buttons shown on
+    every instrument strip (up to 5); the active one lights up. Right-click a button to remove it. The buttons belong to
+    the set: a new set has none (and no row), and older sets keep the buttons they had.
+  - Scenes remember each instrument's key, scale, octave - and Any key.
+- **GRID <** / **GRID >** on the Fire move the instruments it plays down / up an
+  octave (octaves 1-6; with SHIFT held they pick the light-show pattern instead). The Fire's **VOLUME knob** (top left) turns
+  the faders of the instruments it plays up or down together, all by the same dB, so the balance you set between
+  them on screen stays the same (half a dB a click, faster below -30 dB). Turned all the way down, the quieter ones
+  wait at off and come back in at their own levels on the way up. Moving a fader yourself sets a new balance. The Fire's other buttons stay free
+  for MIDI-learn, and a GRID button given a MIDI-learn job does that job instead.
+- **Two Fires** (Windows lists the second as "2 - FL STUDIO FIRE"): in *Play from*, set each instrument to its own Fire to split
+  them: each Fire then plays only its instrument and lights its pads in that instrument's key. An instrument left on
+  *All keyboards and the Fire* is played by both. Airloom knows each Fire by the **USB port** it's plugged into, so
+  unplugging and replugging is fine even though Windows renames it ("3 - FL STUDIO FIRE"). Plugged into a different
+  port, a Fire is taken to be the one no other instrument is using (the instrument's line shows "unplugged" for its
+  old one); pick it again in *Play from* to make that its port.
+- **REC** is ready-assigned to record a loop, like REC on screen: dim red when ready, bright red while recording,
+  amber while overdubbing; it blinks during a count-in.
+- The Fire's **PLAY** button is a beat light while loops are playing or you're recording: green on beat 1, yellow
+  on the others.
+
+### Akai Fire light show
+
+A Fire's pads can show a light show driven by what's going to the speakers. On the Fire, **hold SHIFT** and press:
+
+| Button | Does |
+| --- | --- |
+| **ALT** | Light show on / off (back to the key lights). Remembers the last pattern and colours. |
+| **GRID >** / **GRID <** | Next / previous pattern (switches it on) |
+| **PATTERN up** / **down** | Next / previous colour palette |
+| **BROWSER** | Join the two Fires into one display: steps this Fire through *on its own -> left -> right -> top -> below* |
+
+Patterns: **Spectrum** (bars, lows on the left), **Mirror** (lows in the middle, bars growing up and down),
+**Glow** (slow colour waves), **Plasma** (flowing colour field), **Waves** (two lines snaking across - lows and
+highs), **Bursts** (rings bursting out on each beat, or each new sound when nothing's in time), **Kaleidoscope**
+(spokes turning round the centre), **Diamonds** (diamond rings flowing out, a bright one on the beat), **Stars**
+(twinkles where the music is loud). Palettes: Ambient, Aurora, Ember, Ocean, Rainbow, Moon.
+
+Everything moves faster and brighter as the music fills out, and adjusts to the level so quiet passages still show.
+Each Fire has its own setting; the pads keep playing their instrument. The status line shows the pattern and palette.
+
+**Two Fires as one display:** press SHIFT + BROWSER on a Fire to say where it sits - left, right, top or below - and
+the other Fire takes the opposite place. They then show one picture across both: 32 x 4 side by side, or 16 x 8
+stacked (bars twice as tall). Waves, bursts and rings travel from one into the other, and a pattern or palette change
+on either changes both. Keep pressing to go back to *on its own*. The positions are remembered for each Fire's USB port.
+
+### Akai MidiMix
+
+- Ready-assigned out of the box: the **master fader**, and the first two **REC ARM** buttons (arm inputs 1-2), which
+  light up while armed. *Clear all MIDI* brings these back.
+- Its buttons light up for whatever they're assigned to (mutes, play buttons, ARM), and it's never treated as a
+  keyboard, so it doesn't play instruments.
 
 ## If Airloom closes unexpectedly
 
