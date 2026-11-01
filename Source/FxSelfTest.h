@@ -2322,7 +2322,7 @@ namespace FxSelfTest
             ToastStack cards;
             cards.setBounds (0, 0, 420, 220);
             cards.post ("Flume Pad A minor 1, CONDUIT A minor 1 recorded (0:16) - each on its own channel", ToastStack::Kind::info);
-            cards.post ("Could not save C:\\Users\\Lynx\\Desktop\\My Set\\Flute Performance Set.liverig", ToastStack::Kind::error);
+            cards.post ("Could not save D:\\Sets\\Evening Set.liverig", ToastStack::Kind::error);
             cards.post ("Undone", ToastStack::Kind::info);
             cards.post ("Undone", ToastStack::Kind::info);   // the same again: one card, kept up longer
             juce::Thread::sleep (200);                       // past the fade-in
