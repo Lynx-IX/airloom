@@ -5,6 +5,8 @@ groups, record new loops from a mic or plug-in instruments in time, shape everyt
 and move between scenes - from the screen, a MIDI controller (an Akai MidiMix or Fire, or any
 other) or both. Free and open source.
 
+![Airloom: groups of loops and samples, scenes along the top, live inputs and instruments in the dock below](docs/screenshot.png)
+
 ## Download
 
 From the [releases page](../../releases):
