@@ -1,33 +1,35 @@
-AIRLOOM - putting it on another computer
-========================================
+AIRLOOM - the portable copy
+===========================
 
-1. Copy the "Airloom" folder (or unzip "Airloom for Windows.zip") somewhere on
-   the computer, e.g. the Desktop or Documents. There's nothing to install:
-   Airloom.exe runs on its own on Windows 10 or 11.
+This folder runs without installing anything: Airloom.exe works on its own on
+Windows 10 or 11 (64-bit). If you'd rather have a Start menu entry, a desktop
+shortcut and sets that open with a double-click, use Airloom-Setup instead.
+
+1. Put the "Airloom" folder somewhere to keep it, e.g. Documents.
 
 2. Double-click Airloom.exe. If Windows shows "Windows protected your PC",
-   click "More info" then "Run anyway" (it appears because the app isn't
-   signed by a publisher - it's your own build).
-   Tip: right-click Airloom.exe > "Show more options" > "Send to" >
-   "Desktop (create shortcut)" for a shortcut.
+   click "More info" then "Run anyway" (until Airloom's builds are signed).
+   For a shortcut: right-click Airloom.exe > "Show more options" > "Send to" >
+   "Desktop (create shortcut)".
 
-3. Set it up once on that computer:
-   - Plug in your audio interface (install its driver first, e.g. Focusrite
-     Control for the Scarlett) and pick it in Audio Settings.
-   - Plug in the MidiMix and the Fire - they're found automatically.
-   - Install the plug-ins your sets use (Vital, Serum, Graillon...) from their
-     makers. Then press + INSTRUMENT > Scan for plug-ins once.
+3. Set it up once on each computer:
+   - Plug in your audio interface (install its driver first) and pick it in
+     Settings > Audio. Use the smallest buffer that plays without crackles.
+   - MIDI controllers (an Akai MidiMix, a Fire, a keyboard) are found
+     automatically.
+   - Install any plug-ins your sets use from their makers, then use
+     GROUP > Instrument group > Scan for plug-ins once.
 
-4. Bring your sets over: on the old computer use Set > Export set as one file,
-   copy the .liverigpack across, then on this computer Set > Open set and pick
-   it. It unpacks into Music\Airloom Sets and opens ready to play. The pack
-   includes "Plug-ins needed.txt" listing what to install.
+4. Bring sets from another computer: there, use Set > Export set as one file;
+   here, Set > Open set and pick the .liverigpack. It unpacks into
+   Music\Airloom Sets and opens ready to play, with "Plug-ins needed.txt"
+   listing anything to install.
 
 Settings for this computer (audio device, MIDI, the last session) are kept in
-%APPDATA%\LiveRig. Recorded loops are saved in %APPDATA%\LiveRig\Recordings
-until you save or export the set. (The app was called Live Rig before; it
-keeps that folder, so nothing needs moving.)
+%APPDATA%\LiveRig; loops recorded before a set is saved are in
+%APPDATA%\LiveRig\Recordings.
 
-To update Airloom later, just replace Airloom.exe with the new one.
-Coming from Live Rig: delete the old Live Rig.exe and its desktop shortcut,
-and make a new shortcut to Airloom.exe - all your settings carry over.
+To update, replace Airloom.exe with the new one - settings and sets carry over.
+
+Airloom is free software under the GNU AGPL v3 (LICENSE.txt). Source code:
+see the project page it was downloaded from.

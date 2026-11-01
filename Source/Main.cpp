@@ -60,6 +60,30 @@ public:
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         mainWindow = std::make_unique<MainWindow> (getApplicationName() + " - Audio Performance Rig");
         Theme::onSwitched = [] { TitleBar::tintAll(); };
+        openFile (commandLine);
+    }
+
+    // A set double-clicked while Airloom is already open arrives here (one copy at a time).
+    void anotherInstanceStarted (const juce::String& commandLine) override
+    {
+        if (mainWindow == nullptr)
+            return;
+        mainWindow->setMinimised (false);
+        mainWindow->toFront (true);
+        openFile (commandLine);
+    }
+
+    // Once the last session has come back, so the set opened replaces it.
+    void openFile (const juce::String& commandLine)
+    {
+        if (commandLine.trim().isEmpty())
+            return;
+        juce::MessageManager::callAsync ([this, commandLine]
+        {
+            if (mainWindow != nullptr)
+                if (auto* main = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
+                    main->openFromCommandLine (commandLine);
+        });
     }
 
     void shutdown() override

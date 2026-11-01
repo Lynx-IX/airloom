@@ -1573,6 +1573,14 @@ void MainComponent::openSet()
                               });
 }
 
+void MainComponent::openFromCommandLine (const juce::String& commandLine)
+{
+    const juce::File file (commandLine.trim().unquoted());
+    if (commandLine.trim().isNotEmpty() && juce::File::isAbsolutePath (commandLine.trim().unquoted()) && file.existsAsFile()
+        && (file.hasFileExtension (LiveSet::fileExtension) || file.hasFileExtension (LiveSet::packExtension)))
+        openSetFile (file);
+}
+
 void MainComponent::openSetFile (const juce::File& file)
 {
     confirmLeavingSet ([this, file]

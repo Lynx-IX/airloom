@@ -1,43 +1,66 @@
 # Airloom
 
-*Audio performance rig* (formerly Live Rig).
+An instrument for live, looping, ambient performance on Windows: play loops and samples in
+groups, record new loops from a mic or plug-in instruments in time, shape everything with effects,
+and move between scenes - from the screen, a MIDI controller (an Akai MidiMix or Fire, or any
+other) or both. Free and open source.
 
-A standalone JUCE app for live ambient/healing performance, replacing FL Studio on stage.
+## Download
 
-Rig: any audio interface (Scarlett 2i2 on the laptop, MOTU at home), Akai MidiMix, Akai Fire, Windows.
+From the [releases page](../../releases):
 
-## Roadmap
+- **Airloom-Setup-x.y.z.exe** - the installer. It installs just for you (no administrator
+  prompt), adds Airloom to the Start menu, can put a shortcut on the desktop, and makes sets
+  (`.liverig`, `.liverigpack`) open in Airloom with a double-click. Uninstall it from Windows
+  Settings > Apps; your sets, recordings and settings stay.
+- **Airloom for Windows.zip** - the portable copy: unzip it anywhere and run `Airloom.exe`.
 
-| Stage | Scope | Status |
-|---|---|---|
-| 1 | Window, audio device, one seamless WAV loop, transport + level meter | done |
-| 2 | Groups of channels (loops, XF auto crossfade, one-shots), per-channel and per-group volume, MidiMix, sets | **done - test on the rig** |
-| 3 | Mic and instrument input channels; low cut, delay and reverb on inputs and on every group | **done - test on the rig** |
-| 4 | VST3 instrument hosting; Akai Fire pads as a scale keyboard with lit scale | **done - test on the rig** |
-| 5 | Loop recording from live inputs (with or without effects), overdub, undo, length snapping | **done - test on the rig** |
+Windows 10 or 11, 64-bit. Until the builds are signed, Windows may say "Windows protected your
+PC": click *More info* > *Run anyway*.
 
 ## Build
 
-Requires Visual Studio 2026 (Desktop C++ workload), CMake 3.22+, and JUCE at `C:\JUCE`
+Requires Visual Studio 2022 or 2026 (Desktop C++ workload), CMake 3.22+, and JUCE 8 at `C:\JUCE`
 (override with `-DJUCE_DIR=...`). Keep the build folder on a short path (MSBuild breaks past 260 chars):
 
 ```
-cmake -S . -B %TEMP%\LiveRig-build -G "Visual Studio 18 2026" -A x64
+cmake -S . -B %TEMP%\LiveRig-build -A x64
 cmake --build %TEMP%\LiveRig-build --config Release
 ```
 
-The app is at `%TEMP%\LiveRig-build\LiveRig_artefacts\Release\Airloom.exe`.
+The app is at `%TEMP%\LiveRig-build\LiveRig_artefacts\Release\Airloom.exe`. It has the C++ runtime built in,
+so it runs on any Windows 10/11 PC with nothing else to install.
 
-**For another computer:** run `powershell -ExecutionPolicy Bypass -File package.ps1`. It builds and puts a ready copy
-in `Release\Airloom\` (the program plus *How to install.txt*) and `Release\Airloom for Windows.zip`. The program has
-the C++ runtime built in, so it runs on any Windows 10/11 PC with nothing to install - just copy and double-click.
-
-Self-test (renders test signals through the real effects, looper and Fire pad code, and plays a note on Vital if
-it's installed; writes a pass/fail report; can run while the app is open):
+Self-test (renders test signals through the real effects, looper and Fire pad code, draws the
+panels to pictures in `%TEMP%`, and plays a note on Vital if it's installed; writes a pass/fail report;
+can run while the app is open):
 
 ```
 "Airloom.exe" --fx-selftest "%TEMP%\liverig-fxtest.txt"
 ```
+
+## Releasing
+
+`powershell -ExecutionPolicy Bypass -File package.ps1` builds, runs the self-test, and makes
+`Release\Airloom-Setup-<version>.exe` (with [Inno Setup 6](https://jrsoftware.org/isinfo.php):
+`winget install JRSoftware.InnoSetup`) and `Release\Airloom for Windows.zip`. The version comes
+from `project(... VERSION x.y.z)` in `CMakeLists.txt`; the installer is `Packaging\Airloom.iss`.
+
+On GitHub, `.github/workflows/build.yml` does the same on every push (the files are kept with the
+run) and, for a tag like `v1.0.0`, makes a draft release with both files attached: bump the version,
+commit, `git tag v1.0.0`, `git push origin v1.0.0`, then check the draft and publish it.
+
+**Signing**, so Windows stops warning about an unknown publisher: open-source projects can get a
+free certificate through [SignPath Foundation](https://signpath.org) once the repository is public.
+After they accept it, add their signing step to the workflow (where it's marked). With a certificate
+of your own, `package.ps1 -Sign "signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /a"`
+signs the program and the installer.
+
+## Licence
+
+Airloom is free software under the [GNU Affero General Public License v3](LICENSE). It's built
+on [JUCE](https://juce.com), used under the same licence, and hosts VST3 plug-ins through the
+VST3 SDK (MIT). VST is a registered trademark of Steinberg Media Technologies GmbH.
 
 ## How it works
 
@@ -454,6 +477,8 @@ saved automatically, so the app reopens exactly where you left off.
   (or a crash) never loses work. Before overwriting, Airloom keeps a dated copy in a **Backups** folder beside the set
   (at most one every 10 minutes, the newest 20) - **Set > Show backups**, then open any of them like a set. A set that
   has never been saved is kept in the session; **New set** or **Open set** asks before replacing it.
+- **Opening from Explorer:** with Airloom installed, double-click a `.liverig` set or a `.liverigpack` to open it
+  (in the Airloom that's already open, if it is).
 - **Undo / Redo:** **Ctrl Z** and **Ctrl Y** (or Ctrl Shift Z; also at the top of the Set menu), up to 60 steps.
   Edits are undone - loading or clearing samples, moving and renaming channels and groups, effects, trims, layout,
   scenes added or removed, folders - while what's playing keeps playing in time, faders and mutes stay where they

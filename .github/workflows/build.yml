@@ -1,0 +1,51 @@
+# Builds Airloom on every push and pull request (the installer and portable zip are kept as the
+# run's artifacts), and publishes them as a GitHub release when a version tag is pushed:
+#   git tag v1.0.0 && git push origin v1.0.0
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to create the release on a tag
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get JUCE
+        run: git clone --depth 1 --branch 8.0.12 https://github.com/juce-framework/JUCE.git C:\JUCE
+
+      - name: Get Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build, self-test and package
+        shell: pwsh
+        run: ./package.ps1 -Build "$env:RUNNER_TEMP\b"
+
+      # Signing (once SignPath Foundation has accepted the project - see README, Releasing):
+      # submit Release/Airloom/Airloom.exe and the installer with
+      # signpath/github-action-submit-signing-request, then publish the signed files below.
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Airloom-${{ github.sha }}
+          path: |
+            Release/Airloom-Setup-*.exe
+            Release/Airloom for Windows.zip
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true   # check it over, then press Publish on GitHub
+          generate_release_notes: true
+          files: |
+            Release/Airloom-Setup-*.exe
+            Release/Airloom for Windows.zip

@@ -39,6 +39,10 @@ public:
     MainComponent();
     ~MainComponent() override;
 
+    // A set or pack double-clicked in Explorer (or passed on the command line): opens it, asking
+    // about unsaved changes first. Anything else is ignored.
+    void openFromCommandLine (const juce::String& commandLine);
+
     // Shown when the window opens: e.g. that the last run ended unexpectedly (see CrashLog).
     static inline juce::String startupWarning;
 
