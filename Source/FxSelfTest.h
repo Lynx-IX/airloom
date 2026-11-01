@@ -2270,12 +2270,59 @@ namespace FxSelfTest
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (both, out), "Dialogs drawn to " + file.getFullPathName());
         }
 
+        // ---- Button icons ----
+        {
+            const juce::StringArray names { "record", "record-set", "play", "stop-all", "transport-go", "undo", "redo", "settings",
+                                            "overdub", "mute", "monitor", "arm-recording", "effects-fx", "freeze", "add-group",
+                                            "stage-mode", "scene", "tap-tempo", "folder", "options" };
+            juce::StringArray missing;
+            for (const auto& n : names)
+                if (Icons::get (n, Theme::text) == nullptr)
+                    missing.add (n);
+            check (missing.isEmpty(), "All 20 button icons load" + (missing.isEmpty() ? juce::String() : " (missing: " + missing.joinIntoString (", ") + ")"));
+            check (Icons::get ("no-such-icon", Theme::text) == nullptr, "An unknown icon name gives none (the button keeps its label)");
+
+            // The buttons that carry one, at their real sizes, plus one too narrow for both.
+            struct Sample { const char* label; const char* icon; int width; juce::Colour colour; };
+            const Sample samples[] = {
+                { "REC SET", "record-set", 118, Theme::danger.darker (0.9f) }, { "START", "transport-go", 92, Theme::raised },
+                { "STAGE", "stage-mode", 90, Theme::raised }, { "GROUP", "add-group", 90, Theme::raised },
+                { "Set", "folder", 90, Theme::raised }, { "Settings", "settings", 140, Theme::raised },
+                { "STOP ALL", "stop-all", 150, Theme::danger.darker (1.2f) }, { "FREEZE", "freeze", 110, Theme::raised },
+                { "REC", "record", 100, Theme::danger.darker (0.9f) }, { "DUB", "overdub", 70, Theme::raised },
+                { "UNDO", "undo", 70, Theme::raised }, { "TAP", "tap-tempo", 70, Theme::raised },
+                { "+ SCENE", "scene", 130, Theme::raised }, { "MUTE OUT", "mute", 84, Theme::raised },
+                { "FROZEN", "freeze", 50, Theme::raised } };
+            juce::Image image (juce::Image::ARGB, 1100, 120, true);
+            {
+                juce::Graphics g (image);
+                g.fillAll (Theme::background);
+                int x = 10, y = 10;
+                for (const auto& s : samples)
+                {
+                    juce::TextButton b (s.label);
+                    Icons::set (b, s.icon);
+                    b.setColour (juce::TextButton::buttonColourId, s.colour);
+                    b.setSize (s.width, 32);
+                    if (x + s.width > image.getWidth() - 10) { x = 10; y += 48; }
+                    juce::Graphics::ScopedSaveState state (g);
+                    g.setOrigin (x, y);
+                    b.paintEntireComponent (g, false);
+                    x += s.width + 10;
+                }
+            }
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("airloom-icons.png");
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (image, out), "Icon buttons drawn to " + file.getFullPathName());
+        }
+
         // ---- Notification cards ----
         {
             ToastStack cards;
             cards.setBounds (0, 0, 420, 220);
             cards.post ("Flume Pad A minor 1, CONDUIT A minor 1 recorded (0:16) - each on its own channel", ToastStack::Kind::info);
-            cards.post ("Could not save C:\Users\Lynx\Desktop\My Set\Flute Performance Set.liverig", ToastStack::Kind::error);
+            cards.post ("Could not save C:\\Users\\Lynx\\Desktop\\My Set\\Flute Performance Set.liverig", ToastStack::Kind::error);
             cards.post ("Undone", ToastStack::Kind::info);
             cards.post ("Undone", ToastStack::Kind::info);   // the same again: one card, kept up longer
             juce::Thread::sleep (200);                       // past the fade-in

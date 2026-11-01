@@ -191,6 +191,7 @@ MainComponent::MainComponent()
     setupInputs();
     addAndMakeVisible (addRowButton);
     addRowButton.setTooltip ("Add a group: loops, interface inputs or instruments");
+    Icons::set (addRowButton, "add-group");
     addRowButton.onClick = [this] { showAddGroupMenu(); };
 
     addAndMakeVisible (masterStrip);
@@ -216,11 +217,13 @@ MainComponent::MainComponent()
 
     addAndMakeVisible (stopAllButton);
     stopAllButton.onClick = [this] { stopAll (fadeTimeSlider.getValue()); };
+    Icons::set (stopAllButton, "stop-all");
     stopAllButton.setColour (juce::TextButton::buttonColourId, Theme::danger.darker (1.2f));
     stopAllButton.onRightClick = [this] { showLearnMenu ("stopAll", "Stop all"); };
 
     addAndMakeVisible (freezeButton);
     freezeButton.setWantsKeyboardFocus (false);
+    Icons::set (freezeButton, "freeze");
     freezeButton.setTooltip ("Hold what you just played as an endless pad to play over. Press again to let it go "
                              "(it fades out over the fade time). Right-click to assign a MIDI button.");
     freezeButton.onClick = [this] { toggleFreeze(); };
@@ -229,6 +232,7 @@ MainComponent::MainComponent()
 
     addAndMakeVisible (recordSetButton);
     recordSetButton.setWantsKeyboardFocus (false);
+    Icons::set (recordSetButton, "record-set");
     recordSetButton.setTooltip ("Record everything going to the speakers to a WAV file. Right-click for the recordings folder.");
     recordSetButton.onClick = [this] { toggleSetRecording(); };
     recordSetButton.onRightClick = [this]
@@ -247,7 +251,9 @@ MainComponent::MainComponent()
     addAndMakeVisible (setButton);
     addAndMakeVisible (settingsButton);
     setButton.onClick = [this] { showSetMenu(); };
+    Icons::set (setButton, "folder");
     settingsButton.onClick = [this] { showSettings(); };
+    Icons::set (settingsButton, "settings");
     settingsButton.setTooltip ("Audio device, theme, zoom and layout   (Ctrl ,)");
 
     addAndMakeVisible (fadeTimeLabel);
@@ -269,6 +275,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (tapButton);
 
     addAndMakeVisible (setTimerButton);
+    Icons::set (setTimerButton, "transport-go");
     setTimerButton.setTooltip ("Start or pause the set timer. Right-click to reset it.");
     setTimerButton.setWantsKeyboardFocus (false);
     setTimerButton.onClick = [this] { toggleSetTimer(); };
@@ -285,6 +292,7 @@ MainComponent::MainComponent()
     bpmSlider.setColour (juce::Slider::trackColourId, Theme::panelEdge);
     bpmSlider.setTooltip ("Drag or type the tempo. Synced delays follow it.");
     bpmSlider.onValueChange = [this] { setBpm (bpmSlider.getValue()); };
+    Icons::set (tapButton, "tap-tempo");
     tapButton.setTooltip ("Tap along to set the tempo");
     tapButton.onClick = [this] { tapTempo(); };
     tapButton.onRightClick = [this] { showLearnMenu ("tap", "Tap tempo"); };
@@ -359,6 +367,7 @@ MainComponent::MainComponent()
 
     addAndMakeVisible (muteButton);
     muteButton.setWantsKeyboardFocus (false);
+    Icons::set (muteButton, "mute");
     muteButton.setTooltip ("Silences the speakers instantly - for emergencies (feedback, a wrong sound). Everything keeps "
                            "running, so press again to come straight back. STOP ALL and Esc are the musical fades. "
                            "Right-click to assign a MIDI button.");
@@ -398,6 +407,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (stageButton);
     stageButton.setWantsKeyboardFocus (false);
     stageButton.setClickingTogglesState (false);
+    Icons::set (stageButton, "stage-mode");
     stageButton.setTooltip ("Stage view: scenes, loops and mutes drawn big for performing (F11). Right-click to assign a MIDI button.");
     stageButton.onClick = [this] { setStageMode (! stageMode); };
     stageButton.onRightClick = [this] { showLearnMenu ("stage", "Stage view"); };
@@ -7087,6 +7097,7 @@ void MainComponent::toggleSetTimer()
 
     setTimerRunning = ! setTimerRunning;
     setTimerButton.setButtonText (setTimerRunning ? "STOP" : "START");
+    Icons::set (setTimerButton, setTimerRunning ? "stop-all" : "transport-go");
     setTimerButton.setColour (juce::TextButton::buttonColourId, setTimerRunning ? Theme::accent.darker (0.2f) : Theme::raised);
     setTimerButton.setColour (juce::TextButton::textColourOffId, setTimerRunning ? Theme::background : Theme::text);
     repaint (setTimerArea);
@@ -7451,11 +7462,11 @@ void MainComponent::resized()
     headerArea.removeFromRight (8);
     stageButton.setBounds (headerArea.removeFromRight (90).reduced (0, 2));
     headerArea.removeFromRight (20);
-    setTimerButton.setBounds (headerArea.removeFromRight (72).reduced (0, 2));
+    setTimerButton.setBounds (headerArea.removeFromRight (92).reduced (0, 2));
     headerArea.removeFromRight (8);
     setTimerArea = headerArea.removeFromRight (120);
     headerArea.removeFromRight (8);
-    recordSetButton.setBounds (headerArea.removeFromRight (96).reduced (0, 2));
+    recordSetButton.setBounds (headerArea.removeFromRight (118).reduced (0, 2));
     headerArea.removeFromRight (12);
     perfMeter.setBounds (headerArea.removeFromRight (176));
     headerArea.removeFromRight (12);

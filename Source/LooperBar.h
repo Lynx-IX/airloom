@@ -25,6 +25,9 @@ public:
         recButton.setTooltip ("Record a new loop from the armed sources. Press again to stop - it starts looping straight away.");
         dubButton.setTooltip ("Overdub: record on top of the latest loop (or the one chosen from a loop's menu). Press again to stop.");
         undoButton.setTooltip ("Remove the last overdub");
+        Icons::set (recButton, "record");
+        Icons::set (dubButton, "overdub");
+        Icons::set (undoButton, "undo");
 
         lengthBox.addItem ("Free length", 1);
         lengthBox.addItem ("Snap to bars (BPM)", 2);
@@ -48,6 +51,7 @@ public:
         }
 
         recButton.setButtonText (recording ? "STOP" : "REC");
+        Icons::set (recButton, recording ? "stop-all" : "record");
         recButton.setColour (juce::TextButton::buttonColourId, recording ? Theme::danger : Theme::danger.darker (0.9f));
         dubButton.setColour (juce::TextButton::buttonColourId, overdubbing ? Theme::warn : Theme::raised);
         dubButton.setColour (juce::TextButton::textColourOffId, overdubbing ? Theme::background : Theme::text);

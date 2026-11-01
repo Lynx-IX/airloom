@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "Icons.h"
 
 // Dark, high-contrast palettes meant to be readable at a glance on a dim stage.
 // Surfaces step up in brightness: background < panel < raised < panelEdge.
@@ -271,6 +272,37 @@ namespace Theme
         juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override
         {
             return heading (juce::jmin (13.5f, (float) buttonHeight * 0.52f), 0.06f);
+        }
+
+        // A button with an icon (Icons::set) shows it to the left of its label, the pair centred.
+        // Too narrow for both, it keeps just the label: words are what can't be guessed.
+        void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool over, bool down) override
+        {
+            const auto icon = Icons::of (button);
+            if (icon.isEmpty())
+                return LookAndFeel_V4::drawButtonText (g, button, over, down);
+
+            const auto font = getTextButtonFont (button, button.getHeight());
+            const auto label = button.getButtonText();
+            const auto colour = button.findColour (button.getToggleState() ? juce::TextButton::textColourOnId
+                                                                            : juce::TextButton::textColourOffId)
+                                      .withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f);
+
+            const float iconSize = juce::jlimit (12.0f, 18.0f, (float) button.getHeight() * 0.5f);
+            const float gap = label.isEmpty() ? 0.0f : iconSize * 0.45f;
+            const float textWidth = label.isEmpty() ? 0.0f : juce::GlyphArrangement::getStringWidth (font, label);
+            const float total = iconSize + gap + textWidth;
+            const auto r = button.getLocalBounds().toFloat();
+
+            if (total > r.getWidth() - 12.0f && label.isNotEmpty())
+                return LookAndFeel_V4::drawButtonText (g, button, over, down);
+
+            const float x = r.getCentreX() - total / 2.0f;
+            Icons::draw (g, icon, { x, r.getCentreY() - iconSize / 2.0f, iconSize, iconSize }, colour);
+            g.setFont (font);
+            g.setColour (colour);
+            g.drawText (label, juce::Rectangle<float> (x + iconSize + gap, r.getY(), textWidth + 2.0f, r.getHeight()),
+                        juce::Justification::centredLeft, false);
         }
 
         //==============================================================================

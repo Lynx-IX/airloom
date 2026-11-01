@@ -518,7 +518,7 @@ private:
     LiveDock liveDock;   // the inputs' and instruments' groups, along the bottom
     void layoutLiveDock();
     void setLiveDockFolded (bool fold);
-    juce::TextButton addRowButton { "+ GROUP" };
+    juce::TextButton addRowButton { "GROUP" };
     ChannelStrip masterStrip { "Master", false };
     RightClickable<juce::TextButton> stopAllButton { "STOP ALL" };
     RightClickable<juce::TextButton> freezeButton { "FREEZE" };

@@ -68,7 +68,7 @@ it's installed; writes a pass/fail report; can run while the app is open):
   samples list into a thin strip to give the groups more room (click the strip to open it again).
 - Each group is a layer, with its own volume fader, meter and mute on the left. A new set starts with a
   **Samples** group and a **Live Loops** group (where loops recorded with no key land). Click a group's name to rename it, recolour it, remove it, or add a channel.
-  **+ GROUP** adds one (up to 8).
+  **GROUP** (in the header) adds one (up to 8).
 - **Collapse a group** with the arrow by its name (or *Collapse* in its name menu; *Collapse all groups* /
   *Expand all groups* do every group). A collapsed group is a short bar: its name, MUTE and FX, and a tile per
   channel that lights while it plays - click a tile to play or stop it, right-click for its menu. The group fader
@@ -130,7 +130,7 @@ it's installed; writes a pass/fail report; can run while the app is open):
   every group becomes a short bar with a named tile for each input and instrument (click one to mute or unmute it),
   so it takes little room but still shows what's there; **^** opens it again - remembered on this computer. Drag a group by its name to move it along the dock; wider than the window, the dock scrolls sideways.
 - **Live groups:** interface inputs and hosted instruments sit in their own groups.
-  A new set has an **Inputs** group and an **Instruments** group; **+ GROUP** > *Input group* or *Instrument group*
+  A new set has an **Inputs** group and an **Instruments** group; **GROUP** > *Input group* or *Instrument group*
   adds more (up to 8 live groups), e.g. "Synths" and "Drones". Like a loop group, each has a **fader**, meter,
   **MUTE** and **FX** on its left that act on everything in it (Space sends included), and **+** to add an input or
   instrument to it. Click its name to rename it, recolour it or remove it (its strips move to another group of the

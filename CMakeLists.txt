@@ -20,7 +20,8 @@ juce_add_gui_app(LiveRig
     VERSION ${PROJECT_VERSION})
 
 # The icon again, for the logo in the app's header.
-juce_add_binary_data(AirloomData SOURCES Resources/AppIcon.png README.md)   # the manual is built in (Help)
+file(GLOB AIRLOOM_ICONS CONFIGURE_DEPENDS Resources/Icons/*.svg)
+juce_add_binary_data(AirloomData SOURCES Resources/AppIcon.png README.md ${AIRLOOM_ICONS})   # the manual (Help) and button icons (Icons.h) are built in
 
 juce_generate_juce_header(LiveRig)
 

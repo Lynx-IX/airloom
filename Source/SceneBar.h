@@ -20,6 +20,7 @@ public:
         addButton.setTooltip ("Save the current mix - which loops play and every channel and group level - as a scene. "
                               "Right-click for MIDI buttons to step through the scenes.");
         addButton.onClick = [this] { if (onAdd) onAdd(); };
+        Icons::set (addButton, "scene");
         addButton.onRightClick = [this] { if (onBarMenu) onBarMenu(); };
     }
 
