@@ -322,7 +322,12 @@ strip above the groups holds them. Set up a mix and press **+ SCENE** to save it
 - Right-click a scene to **update** it to the current mix, rename it, set its morph time (instant to 60 s), move it,
   delete it, or assign a MIDI button. Right-click **+ SCENE** for MIDI buttons that step to the **next** and
   **previous** scene - good on a foot switch.
-- Scenes don't change effects, monitoring, ARM or one-shots, and channels added after a scene was saved are left
+- A scene also keeps the **layout**: where each group sits, which are collapsed and their grid width - loop and sample
+  groups, and the input and instrument groups in the LIVE dock. Pressing the scene moves them there straight away, so
+  each part of a set can show just what it needs. Right-click **+ SCENE** and untick *Scenes keep the layout* to keep
+  one layout for every scene. Scenes saved before this keep no layout until they're updated (or left, when they keep
+  changes).
+- Scenes don't change monitoring, ARM or one-shots, and channels added after a scene was saved are left
   as they are. Scenes and their MIDI buttons are saved with the set.
 
 ## Stage view

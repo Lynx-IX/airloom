@@ -2270,6 +2270,39 @@ namespace FxSelfTest
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (both, out), "Dialogs drawn to " + file.getFullPathName());
         }
 
+        // ---- Scenes keep the layout ----
+        {
+            LiveSet set = LiveSet::makeDefault();
+            LiveSet::Scene sc;
+            sc.name = "Opening";
+            sc.places.push_back ({ set.rows[0].uid, { 420, 180 }, true, 3 });
+            if (! set.liveGroups.empty())
+                sc.places.push_back ({ set.liveGroups[0].uid, { -1, -1 }, true, 0 });
+            set.scenes.push_back (sc);
+            set.scenesKeepLayout = false;
+
+            const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory);
+            LiveSet back;
+            back.loadFromXml (*set.toXml (folder), folder);
+            const auto& places = back.scenes.empty() ? std::vector<LiveSet::Scene::Place>() : back.scenes[0].places;
+            check (places.size() == sc.places.size() && ! places.empty() && places[0].uid == set.rows[0].uid
+                       && places[0].position == juce::Point<int> (420, 180) && places[0].collapsed && places[0].columns == 3
+                       && ! back.scenesKeepLayout,
+                   "A scene saves and reopens where its groups sit, which are collapsed and their grid width (and the switch)");
+
+            LiveSet older;
+            auto xml = set.toXml (folder);
+            if (auto* scenes = xml->getChildByName ("Scenes"))
+            {
+                scenes->removeAttribute ("keepLayout");
+                for (auto* e : scenes->getChildIterator())
+                    e->deleteAllChildElementsWithTagName ("Place");
+            }
+            older.loadFromXml (*xml, folder);
+            check (older.scenesKeepLayout && ! older.scenes.empty() && older.scenes[0].places.empty(),
+                   "Scenes from before keep no layout (it's left alone) and the switch starts on");
+        }
+
         // ---- Set files: new names, and the old Live Rig ones still open ----
         {
             check (LiveSet::isSetFile (juce::File ("C:/Sets/A.airloom")) && LiveSet::isSetFile (juce::File ("C:/Sets/A.liverig"))

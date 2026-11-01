@@ -904,6 +904,13 @@ LiveSet::Scene MainComponent::captureScene (const juce::String& name) const
         sc.strips.push_back ({ LiveSet::Scene::Strip::instrument, i, inst.faderDb, inst.muted, true, inst.fx });
         sc.keys.push_back ({ i, inst.padRoot, inst.padScale, inst.padOctave, inst.anyKey });
     }
+    if (liveSet.scenesKeepLayout)
+    {
+        for (const auto& r : liveSet.rows)
+            sc.places.push_back ({ r.uid, r.position, r.collapsed, r.columns });
+        for (const auto& lg : liveSet.liveGroups)
+            sc.places.push_back ({ lg.uid, lg.position, lg.collapsed, lg.columns });
+    }
     return sc;
 }
 
@@ -1067,6 +1074,35 @@ void MainComponent::recallScene (int index)
         }
     }
     updateFireLights();
+
+    // The layout moves straight away: groups to where the scene had them, collapsed or open.
+    if (liveSet.scenesKeepLayout && ! sc.places.empty())
+    {
+        bool changed = false;
+        auto place = [&] (const juce::String& uid, juce::Point<int>& position, bool& collapsed, int& columns)
+        {
+            for (const auto& p : sc.places)
+                if (p.uid == uid && (p.position != position || p.collapsed != collapsed || p.columns != columns))
+                {
+                    position = p.position;
+                    collapsed = p.collapsed;
+                    columns = p.columns;
+                    changed = true;
+                }
+        };
+        for (auto& r : liveSet.rows)
+            place (r.uid, r.position, r.collapsed, r.columns);
+        for (auto& lg : liveSet.liveGroups)
+            place (lg.uid, lg.position, lg.collapsed, lg.columns);
+        if (changed)
+        {
+            updateRowViews();
+            updateLiveGroupViews();
+            layoutLiveDock();
+            layoutRows();
+            saveSession();   // now, while it counts as playing a scene - never an undo step
+        }
+    }
 
     morphStartMs = juce::Time::getMillisecondCounterHiRes();
     morphMs = seconds * 1000.0;
@@ -1410,6 +1446,7 @@ void MainComponent::showSceneBarMenu()
 {
     juce::PopupMenu m;
     m.addItem (3, "Scenes keep changes made in them", true, liveSet.scenesKeepChanges);
+    m.addItem (4, "Scenes keep the layout (where groups sit, which are collapsed)", true, liveSet.scenesKeepLayout);
     m.addSeparator();
     m.addItem (1, "Assign MIDI button: next scene");
     m.addItem (2, "Assign MIDI button: previous scene");
@@ -1420,6 +1457,14 @@ void MainComponent::showSceneBarMenu()
             liveSet.scenesKeepChanges = ! liveSet.scenesKeepChanges;
             infoMessage = liveSet.scenesKeepChanges ? "Scenes now keep what you change in them when you move on"
                                                     : "Scenes now stay as saved - right-click one > Update to change it";
+            saveSession();
+            repaint();
+        }
+        if (r == 4)
+        {
+            liveSet.scenesKeepLayout = ! liveSet.scenesKeepLayout;
+            infoMessage = liveSet.scenesKeepLayout ? "Scenes now keep the layout - each scene remembers it from the next time you leave or update it"
+                                                   : "Scenes now leave the layout as it is";
             saveSession();
             repaint();
         }
@@ -2299,6 +2344,7 @@ void MainComponent::restoreEdit (const juce::String& xmlText)
     liveSet.ensureLiveGroups();
     liveSet.scenes = std::move (target.scenes);
     liveSet.scenesKeepChanges = target.scenesKeepChanges;
+    liveSet.scenesKeepLayout = target.scenesKeepLayout;
     liveSet.keyButtons = std::move (target.keyButtons);
     liveSet.pool = std::move (target.pool);
     liveSet.poolFolders = std::move (target.poolFolders);

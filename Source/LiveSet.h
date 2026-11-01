@@ -163,6 +163,11 @@ struct LiveSet
         std::vector<Group> groups;
         std::vector<Key> keys;
         std::vector<Strip> strips;     // inputs' and instruments' faders and mutes, by index
+
+        // The layout: where each group sits, collapsed or not, and its grid width (loop groups
+        // and input/instrument groups, by uid). Empty: a scene that doesn't keep it - left alone.
+        struct Place { juce::String uid; juce::Point<int> position { -1, -1 }; bool collapsed = false; int columns = 0; };
+        std::vector<Place> places;
     };
 
     static constexpr int maxInputs = 8;          // input strips in a set
@@ -180,6 +185,7 @@ struct LiveSet
     struct KeyButton { int root = 9, scale = 0; };
     std::vector<KeyButton> keyButtons;
     bool scenesKeepChanges = true;     // leaving a scene saves the mix you made in it
+    bool scenesKeepLayout = true;      // scenes also keep where groups sit and which are collapsed
     juce::Array<juce::File> pool;      // every sample loaded into the set, used or not
 
     // The samples panel's folders. A sample sits in the folder it's in on disk unless it's been

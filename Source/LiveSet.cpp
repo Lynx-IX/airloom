@@ -248,6 +248,7 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
 
     auto* scenesXml = xml->createNewChildElement ("Scenes");
     scenesXml->setAttribute ("keepChanges", scenesKeepChanges);
+    scenesXml->setAttribute ("keepLayout", scenesKeepLayout);
     for (const auto& sc : scenes)
     {
         auto* e = scenesXml->createNewChildElement ("Scene");
@@ -278,6 +279,15 @@ std::unique_ptr<juce::XmlElement> LiveSet::toXml (const juce::File& baseFolder) 
             se->setAttribute ("fader", st.faderDb);
             se->setAttribute ("muted", st.muted);
             if (st.hasFx) st.fx.addToXml (*se);
+        }
+        for (const auto& p : sc.places)
+        {
+            auto* pe = e->createNewChildElement ("Place");
+            pe->setAttribute ("uid", p.uid);
+            pe->setAttribute ("x", p.position.x);
+            pe->setAttribute ("y", p.position.y);
+            pe->setAttribute ("collapsed", p.collapsed);
+            pe->setAttribute ("columns", p.columns);
         }
         for (const auto& k : sc.keys)
         {
@@ -492,6 +502,7 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
     scenes.clear();
     const auto* scenesXml = xml.getChildByName ("Scenes");
     scenesKeepChanges = scenesXml == nullptr || scenesXml->getBoolAttribute ("keepChanges", true);
+    scenesKeepLayout = scenesXml == nullptr || scenesXml->getBoolAttribute ("keepLayout", true);
     if (scenesXml != nullptr)
         for (auto* e : scenesXml->getChildWithTagNameIterator ("Scene"))
         {
@@ -524,6 +535,9 @@ void LiveSet::loadFromXml (const juce::XmlElement& xml, const juce::File& baseFo
                 st.fx = fxOf (se, st.hasFx);
                 sc.strips.push_back (st);
             }
+            for (auto* pe : e->getChildWithTagNameIterator ("Place"))
+                sc.places.push_back ({ pe->getStringAttribute ("uid"), { pe->getIntAttribute ("x", -1), pe->getIntAttribute ("y", -1) },
+                                       pe->getBoolAttribute ("collapsed"), juce::jmax (0, pe->getIntAttribute ("columns")) });
             for (auto* ke : e->getChildWithTagNameIterator ("Key"))
                 sc.keys.push_back ({ ke->getIntAttribute ("instrument"), ke->getIntAttribute ("root", 9),
                                      ke->getIntAttribute ("scale"), ke->getIntAttribute ("octave", 3),
