@@ -1,17 +1,17 @@
-; Airloom's Windows installer (Inno Setup 6: https://jrsoftware.org/isinfo.php).
-; package.ps1 builds it; by hand:  ISCC /DAppVersion=1.0.0 /DExe=<path to Airloom.exe> Packaging\Airloom.iss
+﻿; Airloom's Windows installer (Inno Setup 6: https://jrsoftware.org/isinfo.php).
+; package.ps1 builds it; by hand:  ISCC /DAppVersion=0.9.0 /DExe=<path to Airloom.exe> Packaging\Airloom.iss
 ;
 ; It installs just for the current user by default (no administrator prompt), into
 ; %LOCALAPPDATA%\Programs\Airloom, with a Start menu entry, an optional desktop shortcut and
-; .liverig / .liverigpack files opening in Airloom. Uninstalling leaves sets, recordings and
-; settings (%APPDATA%\LiveRig, Music\Airloom Sets) alone.
+; .airloom / .airloompack files (and older .liverig / .liverigpack ones) opening in Airloom. Uninstalling
+; leaves sets, recordings and settings (%APPDATA%\Airloom, Music\Airloom Sets) alone.
 ;
 ; Signing: with /DSign the installer and uninstaller are signed through a sign tool named "airloom"
 ; (ISCC /Sairloom="signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 $f").
 ; Airloom.exe itself is signed before it gets here (package.ps1 -Sign).
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "0.9.0"
 #endif
 #ifndef Exe
   #define Exe "..\Release\Airloom\Airloom.exe"
@@ -53,7 +53,7 @@ SignedUninstaller=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Put a shortcut on the desktop"
-Name: "associate"; Description: "Open Airloom sets (.liverig, .liverigpack) with Airloom"
+Name: "associate"; Description: "Open Airloom sets (.airloom, .airloompack) with Airloom"
 
 [Files]
 Source: "{#Exe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -65,10 +65,12 @@ Name: "{autodesktop}\Airloom"; Filename: "{app}\Airloom.exe"; Tasks: desktopicon
 
 [Registry]
 ; HKA: the current user's classes for a just-me install, the machine's for all users.
+Root: HKA; Subkey: "Software\Classes\.airloom"; ValueType: string; ValueName: ""; ValueData: "Airloom.Set"; Flags: uninsdeletevalue; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\.liverig"; ValueType: string; ValueName: ""; ValueData: "Airloom.Set"; Flags: uninsdeletevalue; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\Airloom.Set"; ValueType: string; ValueName: ""; ValueData: "Airloom set"; Flags: uninsdeletekey; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\Airloom.Set\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Airloom.exe,0"; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\Airloom.Set\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Airloom.exe"" ""%1"""; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\.airloompack"; ValueType: string; ValueName: ""; ValueData: "Airloom.Pack"; Flags: uninsdeletevalue; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\.liverigpack"; ValueType: string; ValueName: ""; ValueData: "Airloom.Pack"; Flags: uninsdeletevalue; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\Airloom.Pack"; ValueType: string; ValueName: ""; ValueData: "Airloom set pack"; Flags: uninsdeletekey; Tasks: associate
 Root: HKA; Subkey: "Software\Classes\Airloom.Pack\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Airloom.exe,0"; Tasks: associate

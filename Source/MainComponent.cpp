@@ -2,6 +2,7 @@
 #include "TempoGuess.h"
 #include "Theme.h"
 #include "GroupLayout.h"
+#include "AppFolder.h"
 #include "CrashLog.h"   // last: it brings in windows.h
 #include "TitleBar.h"
 
@@ -770,9 +771,9 @@ void MainComponent::releaseResources()
 juce::PropertiesFile::Options MainComponent::settingsOptions()
 {
     juce::PropertiesFile::Options options;
-    options.applicationName = "LiveRig";
+    options.applicationName = AppFolder::name();
     options.filenameSuffix = ".settings";
-    options.folderName = "LiveRig";
+    options.folderName = AppFolder::name();
     options.osxLibrarySubFolder = "Application Support";
     return options;
 }
@@ -1562,7 +1563,7 @@ void MainComponent::openSet()
 {
     fileChooser = std::make_unique<juce::FileChooser> ("Open a set (or a set packed into one file)",
                                                        liveSet.getFolder().getParentDirectory(),
-                                                       juce::String ("*") + LiveSet::fileExtension + ";*" + LiveSet::packExtension);
+                                                       LiveSet::openPattern());
 
     fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc)
@@ -1577,7 +1578,7 @@ void MainComponent::openFromCommandLine (const juce::String& commandLine)
 {
     const juce::File file (commandLine.trim().unquoted());
     if (commandLine.trim().isNotEmpty() && juce::File::isAbsolutePath (commandLine.trim().unquoted()) && file.existsAsFile()
-        && (file.hasFileExtension (LiveSet::fileExtension) || file.hasFileExtension (LiveSet::packExtension)))
+        && (LiveSet::isSetFile (file) || LiveSet::isPackFile (file)))
         openSetFile (file);
 }
 
@@ -1585,7 +1586,7 @@ void MainComponent::openSetFile (const juce::File& file)
 {
     confirmLeavingSet ([this, file]
     {
-        if (file.hasFileExtension (LiveSet::packExtension))
+        if (LiveSet::isPackFile (file))
         {
             openPack (file);
             return;
@@ -1895,11 +1896,12 @@ void MainComponent::openPack (const juce::File& pack)
         juce::ZipFile zip (pack);
         const bool ok = zip.getNumEntries() > 0 && zip.uncompressTo (destination, true).wasOk();
 
-        // The set file is the .liverig inside (in a folder named after the set).
+        // The set file is the .airloom (or older .liverig) inside, in a folder named after the set.
         juce::File setFile;
         if (ok)
-            for (auto& f : destination.findChildFiles (juce::File::findFiles, true, juce::String ("*") + LiveSet::fileExtension))
-                setFile = f;
+            for (auto& f : destination.findChildFiles (juce::File::findFiles, true, "*"))
+                if (LiveSet::isSetFile (f))
+                    setFile = f;
 
         juce::MessageManager::callAsync ([safe, ok, setFile, destination, pack]
         {
@@ -2378,10 +2380,11 @@ void MainComponent::backUpSetFile()
     if (! backups.createDirectory())
         return;
     const auto name = liveSet.getName();
+    const auto extension = liveSet.file.getFileExtension();   // an old .liverig set's backups stay .liverig
     liveSet.file.copyFileTo (backups.getChildFile (name + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S")
-                                                   + LiveSet::fileExtension));
+                                                   + extension));
 
-    auto old = backups.findChildFiles (juce::File::findFiles, false, juce::File::createLegalFileName (name) + " *" + LiveSet::fileExtension);
+    auto old = backups.findChildFiles (juce::File::findFiles, false, juce::File::createLegalFileName (name) + " *" + extension);
     std::sort (old.begin(), old.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileName() > b.getFileName(); });
     for (int i = backupsKept; i < old.size(); ++i)
         old.getReference (i).deleteFile();   // only Airloom's own dated backups of this set
@@ -2427,7 +2430,7 @@ void MainComponent::renameSet()
         if (name.isEmpty() || name == liveSet.getName())
             return;
 
-        const auto renamed = liveSet.getFolder().getChildFile (name + LiveSet::fileExtension);
+        const auto renamed = liveSet.getFolder().getChildFile (name + liveSet.file.getFileExtension());
         if (renamed.exists())
         {
             errorMessage = "There's already a " + renamed.getFileName() + " in that folder";
@@ -4026,10 +4029,13 @@ void MainComponent::setupInstrumentStrip (int i, SourceStrip& s)
         applyInstrument (i);
         const auto keys = layoutFor (i);
         const auto relative = keys.describeRelative();
-        infoMessage = "Fire pads: " + keys.describe() + "  -  teal pads are " + PadLayout::noteNames[keys.root]
-                    + (relative.isEmpty() ? juce::String()
-                                          : ", amber pads are " + relative.upToFirstOccurrenceOf (" ", false, false)
-                                            + " (the relative " + relative.fromFirstOccurrenceOf (" ", false, false) + ")");
+        if (fireOutputs.empty())
+            infoMessage = "Key: " + keys.describe() + " - loops recorded from it are named and grouped by it";
+        else
+            infoMessage = "Fire pads: " + keys.describe() + "  -  teal pads are " + PadLayout::noteNames[keys.root]
+                        + (relative.isEmpty() ? juce::String()
+                                              : ", amber pads are " + relative.upToFirstOccurrenceOf (" ", false, false)
+                                                + " (the relative " + relative.fromFirstOccurrenceOf (" ", false, false) + ")");
         saveSession();
     };
     s.onChoiceMenu = [this, i] (int k)
@@ -4291,7 +4297,8 @@ void MainComponent::showInstrumentMenu (int i)
                           false, true);
     m.addSubMenu ("Play from", midiFrom);
 
-    // The Fire's pad keyboard.
+    // Its key: names and groups the loops recorded from it, and lays out a Fire's pads (keyboards
+    // always play every note).
     juce::PopupMenu root, scale, octave;
     root.addItem (99, "Any key (every note)", true, inst.anyKey);
     root.addSeparator();
@@ -4306,14 +4313,14 @@ void MainComponent::showInstrumentMenu (int i)
     juce::PopupMenu fire;
     fire.addSubMenu ("Key", root);
     fire.addSubMenu ("Scale", scale);
-    fire.addSubMenu ("Octave", octave);
+    fire.addSubMenu (fireOutputs.empty() ? "Octave (of a Fire's pads)" : "Octave", octave);
     const bool hasButton = std::any_of (liveSet.keyButtons.begin(), liveSet.keyButtons.end(),
                                         [&inst] (const auto& b) { return b.root == inst.padRoot && b.scale == inst.padScale; });
     fire.addSeparator();
     fire.addItem (160, inst.anyKey ? juce::String ("Add key button (pick a key first)")
                                    : "Add key button: " + PadLayout::shortName (inst.padRoot, inst.padScale),
                   ! inst.anyKey && ! hasButton && (int) liveSet.keyButtons.size() < maxKeyButtons);
-    m.addSubMenu ("Fire pads: " + (inst.anyKey ? juce::String ("Any key") : layoutFor (i).describe()), fire);
+    m.addSubMenu ("Key: " + (inst.anyKey ? juce::String ("Any key") : layoutFor (i).describe()), fire);
 
     m.addSeparator();
     m.addItem (30, "Record loops with effects", true, inst.recordWithFx);

@@ -191,7 +191,7 @@ struct LiveSet
         juce::StringArray closed;                     // folders shown closed
     };
     PoolFolders poolFolders;
-    juce::File file;                   // the .liverig file; empty until saved
+    juce::File file;                   // the .airloom (or older .liverig) file; empty until saved
     double masterDb = 0.0;
     FxSettings space = SpaceReverb::defaults();   // the shared reverb channels send to
     PluginSlot masterInsert;                       // an effect plug-in on the master
@@ -208,9 +208,16 @@ struct LiveSet
     std::shared_ptr<juce::XmlElement> midi;       // MIDI assigned to this set's channels and groups
     int layoutWidth = 0;               // the groups' page width; 0 = the window's (they rearrange to fit it)
 
-    static constexpr int maxRows = 8;  // one per MidiMix fader
-    static constexpr const char* fileExtension = ".liverig";
-    static constexpr const char* packExtension = ".liverigpack";   // a set and its samples in one file (a zip)
+    static constexpr int maxRows = 8;
+    static constexpr const char* fileExtension = ".airloom";
+    static constexpr const char* packExtension = ".airloompack";   // a set and its samples in one file (a zip)
+
+    // Sets and packs saved when the app was Live Rig still open (and a set keeps its own file).
+    static constexpr const char* oldFileExtension = ".liverig";
+    static constexpr const char* oldPackExtension = ".liverigpack";
+    static bool isSetFile (const juce::File& f)    { return f.hasFileExtension (fileExtension) || f.hasFileExtension (oldFileExtension); }
+    static bool isPackFile (const juce::File& f)   { return f.hasFileExtension (packExtension) || f.hasFileExtension (oldPackExtension); }
+    static juce::String openPattern()              { return juce::String ("*") + fileExtension + ";*" + packExtension + ";*" + oldFileExtension + ";*" + oldPackExtension; }
 
     static LiveSet makeDefault();
 

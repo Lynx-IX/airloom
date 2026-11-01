@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "PresetName.h"
+#include "AppFolder.h"
 
 // Development check: loads every VST3 instrument installed and reports what it tells a
 // host about its presets (programs) - how many, which is current, and their names. Many
@@ -62,8 +63,7 @@ namespace PresetProbe
             }
         }
         // The instruments in the current session: readable text inside their saved state.
-        const auto settingsFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                                      .getChildFile ("LiveRig").getChildFile ("LiveRig.settings");
+        const auto settingsFile = AppFolder::get().getChildFile (AppFolder::name() + ".settings");
         if (auto settings = juce::parseXML (settingsFile))
             for (auto* value : settings->getChildIterator())
                 if (value->getStringAttribute ("name") == "session")

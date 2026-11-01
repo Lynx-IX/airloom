@@ -2270,6 +2270,25 @@ namespace FxSelfTest
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (both, out), "Dialogs drawn to " + file.getFullPathName());
         }
 
+        // ---- Set files: new names, and the old Live Rig ones still open ----
+        {
+            check (LiveSet::isSetFile (juce::File ("C:/Sets/A.airloom")) && LiveSet::isSetFile (juce::File ("C:/Sets/A.liverig"))
+                       && LiveSet::isPackFile (juce::File ("C:/Sets/A.airloompack")) && LiveSet::isPackFile (juce::File ("C:/Sets/A.liverigpack"))
+                       && ! LiveSet::isSetFile (juce::File ("C:/Sets/A.airloompack")) && ! LiveSet::isPackFile (juce::File ("C:/Sets/A.wav")),
+                   "Sets are .airloom and packs .airloompack; .liverig and .liverigpack still open");
+            check (LiveSet::openPattern().contains ("*.liverig;") && LiveSet::openPattern().contains ("*.airloompack"),
+                   "Open set offers both the new and the old file types");
+        }
+
+        // ---- ASIO ----
+        {
+            juce::AudioDeviceManager devices;
+            juce::StringArray types;
+            for (auto* t : devices.getAvailableDeviceTypes())
+                types.add (t->getTypeName());
+            check (types.contains ("ASIO"), "ASIO is offered in Settings > Audio (types: " + types.joinIntoString (", ") + ")");
+        }
+
         // ---- Button icons ----
         {
             const juce::StringArray names { "record", "record-set", "play", "stop-all", "transport-go", "undo", "redo", "settings",

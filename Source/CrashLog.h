@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "AppFolder.h"
 
 #if JUCE_WINDOWS
  #ifndef NOMINMAX
@@ -13,14 +14,14 @@
 
 // Finding out why Airloom closed when it shouldn't have.
 //   - A crash writes Crashes\Airloom <date time>.dmp (a minidump, opened against the build's
-//     Airloom.pdb) and a line with the stack to crash-log.txt, in %APPDATA%\LiveRig.
+//     Airloom.pdb) and a line with the stack to crash-log.txt, in %APPDATA%\Airloom (or LiveRig, see AppFolder).
 //   - A "running" marker is left while Airloom is open and removed when it quits properly, so
 //     the next start knows if the last one ended any other way (even one no crash handler sees).
 namespace CrashLog
 {
     inline juce::File folder()
     {
-        return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("LiveRig");
+        return AppFolder::get();
     }
 
     inline juce::File logFile()       { return folder().getChildFile ("crash-log.txt"); }

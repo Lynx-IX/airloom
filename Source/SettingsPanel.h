@@ -19,8 +19,7 @@ public:
         tabs.setOutline (0);
         tabs.setIndent (0);
 
-        auto* audio = new juce::AudioDeviceSelectorComponent (devices, 0, LiveSet::maxDeviceInputs, 0, 2, false, false, true, false);
-        tabs.addTab ("Audio", Theme::panel, audio, true);
+        tabs.addTab ("Audio", Theme::panel, new AudioPage (devices), true);
 
         auto* look = new juce::Component();
         look->addAndMakeVisible (themeLabel);
@@ -60,7 +59,7 @@ public:
         tabs.addTab ("Layout", Theme::panel, layout, true);
 
         tabs.setCurrentTabIndex (juce::jlimit (0, 2, tab), false);
-        setSize (560, 460);
+        setSize (560, 560);
     }
 
     void paint (juce::Graphics& g) override   { g.fillAll (Theme::panel); }
@@ -89,6 +88,33 @@ public:
     }
 
 private:
+    // The device picker, with a word on getting the lowest latency under it.
+    struct AudioPage : public juce::Component
+    {
+        explicit AudioPage (juce::AudioDeviceManager& devices)
+            : selector (devices, 0, LiveSet::maxDeviceInputs, 0, 2, false, false, true, false)
+        {
+            addAndMakeVisible (selector);
+            addAndMakeVisible (hint);
+            hint.setText ("For the lowest delay when playing live, choose ASIO as the type and pick your interface's ASIO driver "
+                          "(most interfaces come with one). Then use the smallest buffer that plays without crackles.",
+                          juce::dontSendNotification);
+            hint.setColour (juce::Label::textColourId, Theme::textDim);
+            hint.setFont (juce::FontOptions (13.5f));
+            hint.setJustificationType (juce::Justification::topLeft);
+        }
+
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            hint.setBounds (r.removeFromBottom (56).reduced (20, 6));
+            selector.setBounds (r);
+        }
+
+        juce::AudioDeviceSelectorComponent selector;
+        juce::Label hint;
+    };
+
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
     juce::Label themeLabel, zoomLabel;
     juce::ComboBox themeBox;

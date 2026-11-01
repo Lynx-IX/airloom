@@ -12,7 +12,7 @@ From the [releases page](../../releases):
 
 - **Airloom-Setup-x.y.z.exe** - the installer. It installs just for you (no administrator
   prompt), adds Airloom to the Start menu, can put a shortcut on the desktop, and makes sets
-  (`.liverig`, `.liverigpack`) open in Airloom with a double-click. Uninstall it from Windows
+  (`.airloom`, `.airloompack`) open in Airloom with a double-click. Uninstall it from Windows
   Settings > Apps; your sets, recordings and settings stay.
 - **Airloom for Windows.zip** - the portable copy: unzip it anywhere and run `Airloom.exe`.
 
@@ -37,7 +37,7 @@ panels to pictures in `%TEMP%`, and plays a note on Vital if it's installed; wri
 can run while the app is open):
 
 ```
-"Airloom.exe" --fx-selftest "%TEMP%\liverig-fxtest.txt"
+"Airloom.exe" --fx-selftest "%TEMP%\airloom-selftest.txt"
 ```
 
 ## Releasing
@@ -216,6 +216,13 @@ Hosted instruments sit in instrument groups (up to 8 instruments in a set).
   without its effects), **FX** (the same effects chain as everything else), a fader, meter and mute.
 - **Playing it:** every MIDI keyboard plays it, on every note. With an Akai Fire, its pads play it too, as a scale
   keyboard - see *Akai Fire* under *Controllers with extra support*.
+- **Key:** an instrument can have a key - its menu > *Key* > **Key** and **Scale** (minor or major pentatonic,
+  natural minor, major, Dorian, Hijaz, chromatic). Loops recorded from it are named and grouped by it ("Loop Bb major 1"),
+  and a Fire's pads follow it. New instruments start on **Any key**; keyboards always play every note either way.
+  - **Key buttons:** *Key* > **Add key button** puts the instrument's key on a row of one-click buttons shown on
+    every instrument strip (up to 5); the active one lights up. Right-click a button to remove it. The buttons belong to
+    the set: a new set has none (and no row), and older sets keep the buttons they had.
+  - Scenes remember each instrument's key, scale, octave - and Any key.
 - **Preset names:** an instrument's strip is titled with the **preset loaded in it** (e.g. "Flume Pad"), with the
   plug-in's name moving to the line under it. Airloom reads it from the settings the plug-in saves - it works for
   Vital and Zyklop (and plug-ins that save a preset name the same way); Serum 2 and Analog Lab don't say, so they show
@@ -235,7 +242,7 @@ The looper controls (REC, DUB, UNDO, loop length and status) sit in the middle o
 1. **ARM** the input(s) you want to record (or press a MIDI button assigned to ARM).
 2. Press **REC** and play. The status shows the time.
 3. Press **STOP** (the same button). The loop starts playing immediately, in time, as a new channel with its own
-   fader, XF, effects and so on. Loops are grouped and named by the recording instrument's key (its menu > *Fire pads* > Key): the first loop in Bb
+   fader, XF, effects and so on. Loops are grouped and named by the recording instrument's key (its menu > *Key*): the first loop in Bb
    major is **Loop Bb major 1** in a **Loops Bb major** group (created automatically, at the bottom); with no
    instrument key they go into **Live Loops**. If all 8 groups are taken, new keys share an existing loops group.
    **Several armed sources** (e.g. two instruments, or an instrument and the mic) record at once, **each onto its own
@@ -260,7 +267,7 @@ The looper controls (REC, DUB, UNDO, loop length and status) sit in the middle o
   **Match first loop** (every new loop is a whole multiple of the first, so they never drift apart).
 - The loop seam is blended using a moment of audio recorded just past the end, so loops repeat without a click
   and keep their exact length.
-- Every take is saved as a WAV straight away (in `%APPDATA%\LiveRig\Recordings`), so it survives a restart; saving
+- Every take is saved as a WAV straight away (in `%APPDATA%\Airloom\Recordings`), so it survives a restart; saving
   the set gathers takes into the set folder like any other sample. Overdubs are written after each pass.
 - REC, DUB, UNDO and the ARM buttons are all MIDI-learnable (right-click), e.g. for a foot switch.
 
@@ -426,11 +433,11 @@ to assign a MIDI button.
 Everything - samples, groups, channels, volumes, mutes, effects, input settings, fade time - is a **set**. The working session is
 saved automatically, so the app reopens exactly where you left off.
 
-- **A saved set saves itself:** a moment after any change, its `.liverig` file is rewritten, so opening another set
+- **A saved set saves itself:** a moment after any change, its `.airloom` file is rewritten, so opening another set
   (or a crash) never loses work. Before overwriting, Airloom keeps a dated copy in a **Backups** folder beside the set
   (at most one every 10 minutes, the newest 20) - **Set > Show backups**, then open any of them like a set. A set that
   has never been saved is kept in the session; **New set** or **Open set** asks before replacing it.
-- **Opening from Explorer:** with Airloom installed, double-click a `.liverig` set or a `.liverigpack` to open it
+- **Opening from Explorer:** with Airloom installed, double-click an `.airloom` set or an `.airloompack` to open it
   (in the Airloom that's already open, if it is).
 - **Undo / Redo:** **Ctrl Z** and **Ctrl Y** (or Ctrl Shift Z; also at the top of the Set menu), up to 60 steps.
   Edits are undone - loading or clearing samples, moving and renaming channels and groups, effects, trims, layout,
@@ -455,9 +462,10 @@ saved automatically, so the app reopens exactly where you left off.
 - **Set > Save set as new folder...** creates a folder and gathers every sample into it - one subfolder per group,
   plus `Samples/` for anything not on a channel. You choose to **copy** (originals stay put) or **move** the files.
   Paths inside are relative, so the whole folder can be copied to another computer.
-- **Set > Save set** updates it; **Set > Open set...** opens a `.liverig`.
+- **Set > Save set** updates it; **Set > Open set...** opens an `.airloom` - or a `.liverig`, from when the app was called Live Rig (it keeps
+  saving to its own file).
 - **Moving to another computer:** **Set > Export set as one file...** packs the set and every sample it uses (live-loop
-  recordings included) into a single `.liverigpack` - copy it on a USB stick or cloud drive. On the other computer,
+  recordings included) into a single `.airloompack` - copy it on a USB stick or cloud drive. On the other computer,
   **Set > Open set...** and pick the pack: it unpacks into `Music\Airloom Sets\<name>` and opens, ready to play.
   Plug-ins (instruments and effects) can't travel in the pack - they need installing on each computer, often with a
   licence - so the pack includes **Plug-ins needed.txt** listing what to install; their settings are in the set and
@@ -490,15 +498,9 @@ Some controllers get more than MIDI-learn when they're plugged in. Without them,
 ### Akai Fire
 
 - **Pads:** the Fire's pads play its instruments as a scale keyboard: left to right walks the scale, each row up starts three scale steps higher.
-  - **Any key** is where a new instrument starts: the pads play every note (chromatic from C, rows a fourth apart,
-    the Cs lit). Keyboards always play every note; keys only shape the Fire's pads.
-  - To play in a key, pick it from the instrument's menu > *Fire pads* > **Key** and **Scale** (minor or major
-    pentatonic, natural minor, major, Dorian, Hijaz, chromatic), and the **Octave**. The pads light up: root notes in
-    teal, the other scale notes dim. *Any key* at the top of the Key menu goes back to every note.
-  - **Key buttons:** *Fire pads* > **Add key button** puts the instrument's key on a row of one-click buttons shown on
-    every instrument strip (up to 5); the active one lights up. Right-click a button to remove it. The buttons belong to
-    the set: a new set has none (and no row), and older sets keep the buttons they had.
-  - Scenes remember each instrument's key, scale, octave - and Any key.
+  - On **Any key** the pads play every note (chromatic from C, rows a fourth apart, the Cs lit).
+  - In a key (the instrument's menu > *Key*, see *Instruments*) they play its scale and light up: root notes in
+    teal, the other scale notes dim. *Key* > **Octave** sets the bottom-left pad's octave.
 - **GRID <** / **GRID >** on the Fire move the instruments it plays down / up an
   octave (octaves 1-6; with SHIFT held they pick the light-show pattern instead). The Fire's **VOLUME knob** (top left) turns
   the faders of the instruments it plays up or down together, all by the same dB, so the balance you set between
@@ -550,13 +552,17 @@ on either changes both. Keep pressing to go back to *on its own*. The positions 
 
 ## If Airloom closes unexpectedly
 
-Airloom keeps a crash log in `%APPDATA%\LiveRig`: a crash writes `crash-log.txt` (what failed, and where) and a
+Airloom keeps a crash log in `%APPDATA%\Airloom` (`%APPDATA%\LiveRig` on computers that ran Live Rig): a crash writes `crash-log.txt` (what failed, and where) and a
 minidump in `Crashes\`. If it closed any other way without quitting, the next start says so in the status line. Keep
 those files to find the cause - the dump is read against `Airloom.pdb`, which the build writes beside Airloom.exe
 (not packaged). `Airloom.exe --crash-test` checks the log by crashing on purpose.
 
 ## Low latency (ASIO)
 
-The build uses WASAPI/DirectSound. For the lowest latency with an interface's ASIO driver (needed for live
-playing in Stages 3-4), JUCE needs the Steinberg ASIO SDK: download it, then add `JUCE_ASIO=1` to
-`target_compile_definitions` and its `common` folder to `target_include_directories` in `CMakeLists.txt`.
+Through Windows Audio there's a noticeable delay between playing and hearing. For live playing, open
+**Settings > Audio**, choose **ASIO** as the type and pick your interface's ASIO driver (most interfaces come with
+one - install it from the maker's site). Then use the smallest buffer that plays without crackles: 128 or 256 samples
+is typical. Some drivers set the buffer in their own window - **Control Panel** on the same page opens it.
+
+An ASIO driver usually lets one program use the interface at a time, so close other music software first. Airloom
+remembers the choice, and if the interface is unplugged it waits for it and reopens it the same way.

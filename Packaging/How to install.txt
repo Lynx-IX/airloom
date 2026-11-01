@@ -21,13 +21,13 @@ shortcut and sets that open with a double-click, use Airloom-Setup instead.
      GROUP > Instrument group > Scan for plug-ins once.
 
 4. Bring sets from another computer: there, use Set > Export set as one file;
-   here, Set > Open set and pick the .liverigpack. It unpacks into
+   here, Set > Open set and pick the .airloompack. It unpacks into
    Music\Airloom Sets and opens ready to play, with "Plug-ins needed.txt"
    listing anything to install.
 
 Settings for this computer (audio device, MIDI, the last session) are kept in
-%APPDATA%\LiveRig; loops recorded before a set is saved are in
-%APPDATA%\LiveRig\Recordings.
+%APPDATA%\Airloom; loops recorded before a set is saved are in
+%APPDATA%\Airloom\Recordings.
 
 To update, replace Airloom.exe with the new one - settings and sets carry over.
 
