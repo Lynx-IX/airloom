@@ -31,5 +31,5 @@ Settings for this computer (audio device, MIDI, the last session) are kept in
 
 To update, replace Airloom.exe with the new one - settings and sets carry over.
 
-Airloom is free software under the GNU AGPL v3 (LICENSE.txt). Source code:
-see the project page it was downloaded from.
+Licensed under the GNU AGPL v3 (LICENSE.txt).
+Source code: https://github.com/Lynx-IX/airloom

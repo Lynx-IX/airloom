@@ -2,7 +2,7 @@
 
 An instrument for live, looping, ambient performance on Windows: play loops and samples in
 groups, record new loops from a mic or plug-in instruments in time, shape everything with effects,
-and move between scenes - from the screen, any MIDI keyboard or controller, or both. Free and open source.
+and move between scenes - from the screen, any MIDI keyboard or controller, or both. Open source.
 
 ![Airloom: groups of loops and samples, scenes along the top, live inputs and instruments in the dock below](docs/screenshot.png)
 
@@ -571,3 +571,7 @@ is typical. Some drivers set the buffer in their own window - **Control Panel** 
 
 An ASIO driver usually lets one program use the interface at a time, so close other music software first. Airloom
 remembers the choice, and if the interface is unplugged it waits for it and reopens it the same way.
+
+## Licence and source code
+
+Licensed under the GNU AGPL v3. Source code: https://github.com/Lynx-IX/airloom
