@@ -6,18 +6,15 @@ and move between scenes - from the screen, any MIDI keyboard or controller, or b
 
 ![Airloom: groups of loops and samples, scenes along the top, live inputs and instruments in the dock below](docs/screenshot.png)
 
-## Download
+## Get Airloom
 
-From the [releases page](../../releases):
+The ready-to-install version is in the [shop](https://headless-uaqvmbpihri-innerrelix-140a.wix-site-host.com/products/airloom):
+a ZIP with the Windows installer. It installs just for you (no administrator prompt), adds Airloom to the Start menu,
+can put a shortcut on the desktop, and makes sets (`.airloom`, `.airloompack`) open in Airloom with a double-click.
+Uninstall it from Windows Settings > Apps; your sets, recordings and settings stay.
 
-- **Airloom-Setup-x.y.z.exe** - the installer. It installs just for you (no administrator
-  prompt), adds Airloom to the Start menu, can put a shortcut on the desktop, and makes sets
-  (`.airloom`, `.airloompack`) open in Airloom with a double-click. Uninstall it from Windows
-  Settings > Apps; your sets, recordings and settings stay.
-- **Airloom for Windows.zip** - the portable copy: unzip it anywhere and run `Airloom.exe`.
-
-Windows 10 or 11, 64-bit. Until the builds are signed, Windows may say "Windows protected your
-PC": click *More info* > *Run anyway*.
+Windows 10 or 11, 64-bit. Until the builds are signed, Windows may say "Windows protected your PC": click *More info* >
+*Run anyway*. You can also build it yourself from this source code (below).
 
 ## Build
 
