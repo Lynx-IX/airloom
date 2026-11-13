@@ -195,7 +195,8 @@ VST3 SDK (MIT). VST is a registered trademark of Steinberg Media Technologies Gm
   file name (e.g. "Drum Loop 72 BPM") and the tempos that fit the loop's length as a whole number of bars
   ("2 bars = 88.42 BPM", "4 bars = 176.84 BPM"...) - pick the one that sounds right. If the loop is playing, beat 1
   lines up with its start. BPM is kept to hundredths, so recorded loops snapped to bars stay locked to it.
-- **BPM and TAP** sit in the bottom bar. Drag or type the tempo, or tap it in (TAP is MIDI-learnable). Synced delays
+- **BPM and TAP** sit in the bottom bar. Click the BPM to type a tempo (then Enter), drag it (slowly for small steps; it settles on a whole
+  number), or tap it in (TAP is MIDI-learnable). Synced delays
   follow it live. Sample loops don't need it - they repeat at their own length - but Stage 5's loop recording will be
   able to snap to bars.
 - Right-click an input fader or mute to learn a MIDI control for it.

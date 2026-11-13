@@ -539,6 +539,7 @@ private:
     juce::Slider fadeTimeSlider;
     juce::Label fadeTimeLabel { {}, "Fade time" };
     juce::Slider bpmSlider;
+    double bpmAtPress = 0.0;              // a click that doesn't move it opens typing
     juce::Label bpmLabel { {}, "BPM" };
     RightClickable<juce::TextButton> tapButton { "TAP" };
     RightClickable<juce::TextButton> syncButton { "SYNC" };

@@ -291,8 +291,22 @@ MainComponent::MainComponent()
         return std::abs (v - std::round (v)) < 0.005 ? juce::String ((int) std::round (v)) : juce::String (v, 2);
     };
     bpmSlider.setColour (juce::Slider::trackColourId, Theme::panelEdge);
-    bpmSlider.setTooltip ("Drag or type the tempo. Synced delays follow it.");
+    bpmSlider.setTooltip ("Click to type a tempo, or drag (slowly for small steps). Synced delays follow it.");
     bpmSlider.onValueChange = [this] { setBpm (bpmSlider.getValue()); };
+
+    // A click types a tempo; a drag moves from where it is (not to where it was clicked), in small
+    // steps when slow, and settles on a whole BPM. Exact tempos from loops keep their decimals.
+    bpmSlider.setSliderSnapsToMousePosition (false);
+    bpmSlider.setVelocityBasedMode (true);
+    bpmSlider.setVelocityModeParameters (0.6, 1, 0.0, false);
+    bpmSlider.onDragStart = [this] { bpmAtPress = bpmSlider.getValue(); };
+    bpmSlider.onDragEnd = [this]
+    {
+        if (std::abs (bpmSlider.getValue() - bpmAtPress) < 0.001)
+            bpmSlider.showTextBox();
+        else
+            setBpm (std::round (bpmSlider.getValue()));
+    };
     Icons::set (tapButton, "tap-tempo");
     tapButton.setTooltip ("Tap along to set the tempo");
     tapButton.onClick = [this] { tapTempo(); };
