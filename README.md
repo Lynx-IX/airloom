@@ -19,14 +19,14 @@ Windows 10 or 11, 64-bit. Until the builds are signed, Windows may say "Windows 
 ## Build
 
 Requires Visual Studio 2022 or 2026 (Desktop C++ workload), CMake 3.22+, and JUCE 8 at `C:\JUCE`
-(override with `-DJUCE_DIR=...`). Keep the build folder on a short path (MSBuild breaks past 260 chars):
+(override with `-DJUCE_DIR=...`). Keep the build folder on a short path (MSBuild breaks past 260 chars), and out of Temp, which Windows clears:
 
 ```
-cmake -S . -B %TEMP%\LiveRig-build -A x64
-cmake --build %TEMP%\LiveRig-build --config Release
+cmake -S . -B %LOCALAPPDATA%\Airloom-build -A x64
+cmake --build %LOCALAPPDATA%\Airloom-build --config Release
 ```
 
-The app is at `%TEMP%\LiveRig-build\LiveRig_artefacts\Release\Airloom.exe`. It has the C++ runtime built in,
+The app is at `%LOCALAPPDATA%\Airloom-build\LiveRig_artefacts\Release\Airloom.exe`. It has the C++ runtime built in,
 so it runs on any Windows 10/11 PC with nothing else to install.
 
 Self-test (renders test signals through the real effects, looper and Fire pad code, draws the

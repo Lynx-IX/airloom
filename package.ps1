@@ -3,12 +3,13 @@
 #   Release\Airloom for Windows.zip        the portable copy: Airloom.exe + How to install.txt
 #
 # Run from the project folder:  powershell -ExecutionPolicy Bypass -File package.ps1
-#   -Build <folder>   where to build (default %TEMP%\LiveRig-build: MSBuild breaks past 260 characters)
+#   -Build <folder>   where to build (default %LOCALAPPDATA%\Airloom-build: a short path, as MSBuild breaks past 260
+#                     characters, and outside Temp, which Windows clears)
 #   -SkipTests        don't run the self-test
 #   -Sign <command>   sign the program and installer, e.g. "signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /a"
 
 param(
-    [string] $Build = (Join-Path $env:TEMP "LiveRig-build"),
+    [string] $Build = (Join-Path $env:LOCALAPPDATA "Airloom-build"),
     [switch] $SkipTests,
     [string] $Sign = ""
 )
