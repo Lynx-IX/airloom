@@ -2270,6 +2270,37 @@ namespace FxSelfTest
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (both, out), "Dialogs drawn to " + file.getFullPathName());
         }
 
+        // ---- Samples that moved (a set opened on another computer) ----
+        {
+            const auto work = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("AirloomRelinkTest");
+            work.deleteRecursively();
+            const auto home = work.getChildFile ("home");
+            const auto setFolder = work.getChildFile ("My Set");
+            home.getChildFile ("Desktop/Pads/Bb major.wav").create();
+            setFolder.getChildFile ("Drums/kick.wav").create();
+            setFolder.getChildFile ("Other/kick.wav").create();
+            setFolder.getChildFile ("Ambient/Rain.wav").create();
+
+            const juce::File elsewhere ("C:/Users/SomeoneElse/Desktop/Pads/Bb major.wav");
+            const juce::File drums ("D:/Old/Drums/kick.wav"), rain ("D:/Old/Rain.wav"), gone ("D:/Old/Gone.wav");
+            const auto moved = LiveSet::findMoved ({ elsewhere, drums, rain, gone }, { setFolder }, home);
+            auto at = [&moved] (const juce::File& f) { const auto it = moved.find (f.getFullPathName()); return it == moved.end() ? juce::File() : it->second; };
+
+            check (at (elsewhere) == home.getChildFile ("Desktop/Pads/Bb major.wav"),
+                   "A sample under another user's folder is found under this computer's");
+            check (at (drums) == setFolder.getChildFile ("Drums/kick.wav") && at (rain) == setFolder.getChildFile ("Ambient/Rain.wav")
+                       && at (gone) == juce::File(),
+                   "Missing samples are found by name in the set's folder (same-named folder wins a tie); ones not there stay missing");
+
+            LiveSet set = LiveSet::makeDefault();
+            set.rows[0].slots[0].file = rain;
+            set.pool.add (rain);
+            set.relocate (moved);
+            check (set.rows[0].slots[0].file == setFolder.getChildFile ("Ambient/Rain.wav") && set.pool[0] == set.rows[0].slots[0].file,
+                   "Relinking points the channel and the samples panel at the found file");
+            work.deleteRecursively();
+        }
+
         // ---- Scenes keep the layout ----
         {
             LiveSet set = LiveSet::makeDefault();

@@ -180,6 +180,59 @@ void LiveSet::relocate (const std::map<juce::String, juce::File>& moved)
     poolFolders.moved = std::move (remapped);
 }
 
+std::map<juce::String, juce::File> LiveSet::findMoved (const juce::Array<juce::File>& missing,
+                                                      const juce::Array<juce::File>& searchFolders,
+                                                      const juce::File& userHome)
+{
+    std::map<juce::String, juce::File> found;
+
+    // Every file in the folders searched, by name (a cap keeps a huge folder from stalling).
+    std::multimap<juce::String, juce::File> byName;
+    int scanned = 0;
+    for (const auto& folder : searchFolders)
+        if (folder.isDirectory())
+            for (const auto& entry : juce::RangedDirectoryIterator (folder, true, "*", juce::File::findFiles))
+            {
+                byName.emplace (entry.getFile().getFileName().toLowerCase(), entry.getFile());
+                if (++scanned > 50000)
+                    break;
+            }
+
+    for (const auto& f : missing)
+    {
+        if (f == juce::File() || f.existsAsFile())
+            continue;
+
+        // The same place under this computer's user folder.
+        const auto path = f.getFullPathName().replaceCharacter ('/', '\\');
+        const int users = path.indexOfIgnoreCase ("\\Users\\");
+        if (users >= 0 && userHome.isDirectory())
+        {
+            const auto afterUser = path.substring (users + 7).fromFirstOccurrenceOf ("\\", false, false);
+            const auto candidate = userHome.getChildFile (afterUser);
+            if (afterUser.isNotEmpty() && candidate.existsAsFile())
+            {
+                found[f.getFullPathName()] = candidate;
+                continue;
+            }
+        }
+
+        // A file of the same name in the folders searched.
+        const auto [first, last] = byName.equal_range (f.getFileName().toLowerCase());
+        juce::File best;
+        int matches = 0;
+        for (auto it = first; it != last; ++it)
+        {
+            ++matches;
+            if (best == juce::File() || it->second.getParentDirectory().getFileName() == f.getParentDirectory().getFileName())
+                best = it->second;
+        }
+        if (matches == 1 || (best != juce::File() && best.getParentDirectory().getFileName() == f.getParentDirectory().getFileName()))
+            found[f.getFullPathName()] = best;
+    }
+    return found;
+}
+
 juce::String LiveSet::encode (const juce::File& f, const juce::File& baseFolder)
 {
     if (f == juce::File())

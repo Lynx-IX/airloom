@@ -440,6 +440,10 @@ saved automatically, so the app reopens exactly where you left off.
   (or a crash) never loses work. Before overwriting, Airloom keeps a dated copy in a **Backups** folder beside the set
   (at most one every 10 minutes, the newest 20) - **Set > Show backups**, then open any of them like a set. A set that
   has never been saved is kept in the session; **New set** or **Open set** asks before replacing it.
+- **Samples in new places:** a set remembers samples outside its own folder by their full path, which another
+  computer won't have. When a set opens, Airloom looks for missing samples in the same place under this computer's
+  user folder and by name inside the set's folder, and relinks what it finds. For the rest, **Set > Find missing
+  samples...** searches a folder you pick (and its subfolders). Exporting the set as one file avoids all this.
 - **Opening from Explorer:** with Airloom installed, double-click an `.airloom` set or an `.airloompack` to open it
   (in the Airloom that's already open, if it is).
 - **Undo / Redo:** **Ctrl Z** and **Ctrl Y** (or Ctrl Shift Z; also at the top of the Set menu), up to 60 steps.

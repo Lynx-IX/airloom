@@ -158,6 +158,9 @@ private:
 
     // Sets
     void showSetMenu();
+    int relinkMissing (const juce::Array<juce::File>& searchFolders);   // returns how many were found
+    int countMissing() const;
+    void findMissingSamples();
     void newSet();
     void openSet();
     void openSetFile (const juce::File& file);

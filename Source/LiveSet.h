@@ -252,6 +252,14 @@ struct LiveSet
     // Points every reference to an old path (full path name) at its new file.
     void relocate (const std::map<juce::String, juce::File>& moved);
 
+    // Where samples that aren't at their saved paths are now, e.g. on another computer: the same
+    // place under this computer's user folder (C:\Users\<someone else>\...), or a file of the same
+    // name inside one of the folders searched (a same-named parent folder breaks ties). Returns
+    // old full path -> found file, for relocate().
+    static std::map<juce::String, juce::File> findMoved (const juce::Array<juce::File>& missing,
+                                                         const juce::Array<juce::File>& searchFolders,
+                                                         const juce::File& userHome);
+
     std::unique_ptr<juce::XmlElement> toXml (const juce::File& baseFolder) const;
 
     // The set as saved, minus what changes while performing (faders, mutes, monitoring, keys

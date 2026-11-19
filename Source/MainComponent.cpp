@@ -842,6 +842,8 @@ void MainComponent::showSetMenu()
     }
     m.addSubMenu ("Open recent", recent, ! recents.isEmpty());
     m.addItem (9, "Export set as one file (to move to another computer)...", packProgress == nullptr);
+    if (const int missing = countMissing(); missing > 0)
+        m.addItem (18, "Find missing samples (" + juce::String (missing) + ")...");
     m.addSeparator();
     m.addItem (5, "Show set folder", saved);
     m.addItem (11, "Show backups", saved && liveSet.getFolder().getChildFile ("Backups").isDirectory());
@@ -874,6 +876,7 @@ void MainComponent::showSetMenu()
         if (r == 14) setRearrangeToFit (liveSet.layoutWidth > 0);
         if (r == 13) redo();
         if (r == 11) liveSet.getFolder().getChildFile ("Backups").revealToUser();
+        if (r == 18) findMissingSamples();
         if (r >= 400 && r < 400 + recentSets().size()) openSetFile (juce::File (recentSets()[r - 400]));
         if (r == 3) saveSet (false);
         if (r == 4) saveSet (true);
@@ -1641,6 +1644,51 @@ void MainComponent::openFromCommandLine (const juce::String& commandLine)
         openSetFile (file);
 }
 
+int MainComponent::countMissing() const
+{
+    int missing = 0;
+    for (const auto& f : liveSet.allFiles())
+        if (f != juce::File() && ! f.existsAsFile())
+            ++missing;
+    return missing;
+}
+
+int MainComponent::relinkMissing (const juce::Array<juce::File>& searchFolders)
+{
+    const auto moved = LiveSet::findMoved (liveSet.allFiles(), searchFolders,
+                                           juce::File::getSpecialLocation (juce::File::userHomeDirectory));
+    if (! moved.empty())
+        liveSet.relocate (moved);
+    return (int) moved.size();
+}
+
+void MainComponent::findMissingSamples()
+{
+    fileChooser = std::make_unique<juce::FileChooser> ("Find missing samples: pick a folder they're in (subfolders are searched too)",
+                                                       juce::File::getSpecialLocation (juce::File::userHomeDirectory));
+    fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                              [this] (const juce::FileChooser& fc)
+                              {
+                                  const auto folder = fc.getResult();
+                                  if (! folder.isDirectory())
+                                      return;
+                                  const int found = relinkMissing ({ folder });
+                                  if (found > 0)
+                                  {
+                                      rebuildRows();
+                                      preloadAll();
+                                      saveSession();
+                                  }
+                                  const int left = countMissing();
+                                  if (found == 0)
+                                      errorMessage = "None of the missing samples are in " + folder.getFileName();
+                                  else
+                                      infoMessage = "Found " + juce::String (found) + (found == 1 ? " sample" : " samples")
+                                                  + (left > 0 ? " - " + juce::String (left) + " still missing" : " - all there now");
+                                  repaint();
+                              });
+}
+
 void MainComponent::openSetFile (const juce::File& file)
 {
     confirmLeavingSet ([this, file]
@@ -2073,15 +2121,18 @@ void MainComponent::loadSet (const juce::XmlElement& xml, const juce::File& base
         loadSlot ("grp." + r.uid, r.insert);
     loadSlot ("master", liveSet.masterInsert);
 
+    // Samples not where the set says (e.g. opened on another computer): look for them first.
+    const int relinked = countMissing() > 0 ? relinkMissing ({ liveSet.getFolder() }) : 0;
+
     rebuildLiveGroups();
     rebuildRows();
 
-    int missing = 0;
-    for (auto& f : liveSet.allFiles())
-        if (! f.existsAsFile())
-            ++missing;
-    if (missing > 0)
-        errorMessage = juce::String (missing) + (missing == 1 ? " file in this set was" : " files in this set were") + " not found";
+    if (const int missing = countMissing(); missing > 0)
+        errorMessage = juce::String (missing) + (missing == 1 ? " sample in this set wasn't" : " samples in this set weren't")
+                     + " found" + (relinked > 0 ? " (" + juce::String (relinked) + " others were, in new places)" : juce::String())
+                     + " - Set > Find missing samples to show Airloom where they are";
+    else if (relinked > 0)
+        infoMessage = juce::String (relinked) + (relinked == 1 ? " sample was" : " samples were") + " found in a new place and relinked";
 
     restoring = false;
     undoStack.clear();
@@ -6678,11 +6729,17 @@ void MainComponent::handleMidi (const juce::String& device, const juce::MidiMess
     {
         const bool isFader = learnTarget.containsIgnoreCase ("fader") || learnTarget.endsWith (".vol") || learnTarget.startsWith ("fx.");
 
-        if ((isFader && m.isController()) || (! isFader && pressed))
+        // A button learns a pad or key, or a button that sends a controller (full on); a fader or
+        // knob passing halfway would otherwise be taken for a button press.
+        const bool buttonPress = m.isNoteOn() ? pressed : (m.isController() && m.getControllerValue() == 127);
+
+        if ((isFader && m.isController()) || (! isFader && buttonPress))
         {
-            midiMap.bind (learnTarget, { device, m.isNoteOn(),
-                                         m.isNoteOn() ? m.getNoteNumber() : m.getControllerNumber(),
-                                         m.getChannel() });
+            const MidiBinding binding { device, m.isNoteOn(), m.isNoteOn() ? m.getNoteNumber() : m.getControllerNumber(), m.getChannel() };
+            midiMap.bind (learnTarget, binding);
+            takeover.erase (learnTarget);
+            infoMessage = learnLabel + " is on " + binding.describe()
+                        + (isFader ? " - it picks up when the control reaches the on-screen position" : juce::String());
             learnTarget.clear();
             saveMidiMap();
             updateMidiLeds();
@@ -6944,11 +7001,11 @@ void MainComponent::updateMidiLeds (bool allOff)
             wanted[b.number] = wanted[b.number] || lit;
     };
 
+    for (const auto& lg : liveSet.liveGroups)
+        want ("live." + lg.uid + ".mute", ! lg.muted);
     for (const auto& row : liveSet.rows)
     {
         want ("grp." + row.uid + ".mute", ! row.muted);   // lit = group is on, like most DAWs
-    for (const auto& lg : liveSet.liveGroups)
-        want ("live." + lg.uid + ".mute", ! lg.muted);
         for (const auto& slot : row.slots)
         {
             // A loop waiting for its beat (to start or to stop) blinks.
