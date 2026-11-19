@@ -2706,7 +2706,8 @@ void MainComponent::rebuildRows()
         disableKeyboardFocus (*view);
     }
 
-    addRowButton.setEnabled ((int) liveSet.rows.size() < LiveSet::maxRows);
+    // Loop groups and input/instrument groups have their own limits: the button stays while either has room.
+    addRowButton.setEnabled ((int) liveSet.rows.size() < LiveSet::maxRows || (int) liveSet.liveGroups.size() < LiveSet::maxLiveGroups);
     layoutRows();
     updateRowViews();
     updateMidiLeds();

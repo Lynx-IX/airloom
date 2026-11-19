@@ -1,5 +1,5 @@
 ﻿; Airloom's Windows installer (Inno Setup 6: https://jrsoftware.org/isinfo.php).
-; package.ps1 builds it; by hand:  ISCC /DAppVersion=0.9.3 /DExe=<path to Airloom.exe> Packaging\Airloom.iss
+; package.ps1 builds it; by hand:  ISCC /DAppVersion=0.9.4 /DExe=<path to Airloom.exe> Packaging\Airloom.iss
 ;
 ; It installs just for the current user by default (no administrator prompt), into
 ; %LOCALAPPDATA%\Programs\Airloom, with a Start menu entry, an optional desktop shortcut and
@@ -11,7 +11,7 @@
 ; Airloom.exe itself is signed before it gets here (package.ps1 -Sign).
 
 #ifndef AppVersion
-  #define AppVersion "0.9.3"
+  #define AppVersion "0.9.4"
 #endif
 #ifndef Exe
   #define Exe "..\Release\Airloom\Airloom.exe"
