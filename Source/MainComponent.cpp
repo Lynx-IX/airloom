@@ -157,6 +157,7 @@ MainComponent::MainComponent()
         return false;
     };
     pool.onFoldersChanged = [this] { saveSession(); };
+    pool.onDelete = [this] (const juce::Array<juce::File>& files) { removeFromPool (files); };
     pool.setFolders (&liveSet.poolFolders);
     pool.setCollapsed (props->getBoolValue ("poolCollapsed"));
     pool.onToggleCollapse = [this]
@@ -6040,25 +6041,39 @@ void MainComponent::showPoolMenu (const juce::Array<juce::File>& files)
             appendToRow (choice - 100, files);
 
         if (choice == 1)
-        {
-            juce::StringArray inUse;
-            for (auto& f : files)
-            {
-                if (liveSet.describeUsage (f).isNotEmpty())
-                    inUse.add (f.getFileNameWithoutExtension());
-                else
-                    liveSet.pool.removeAllInstancesOf (f);
-            }
-
-            pool.setFiles (liveSet.pool);
-            errorMessage = inUse.isEmpty() ? juce::String()
-                                           : "Still on a channel, clear it there first: " + inUse.joinIntoString (", ");
-            saveSession();
-            repaint();
-        }
+            removeFromPool (files);
 
         if (choice == 2) files[0].revealToUser();
     });
+}
+
+void MainComponent::removeFromPool (const juce::Array<juce::File>& files)
+{
+    if (files.isEmpty())
+        return;
+
+    const auto what = files.size() == 1 ? files[0].getFileNameWithoutExtension() : juce::String (files.size()) + " samples";
+    askChoice ("Remove from samples", "Remove " + what + " from the samples list?\n\nThe files stay on your computer.",
+               { "Remove", "Cancel" }, [this, files] (int choice)
+               {
+                   if (choice != 1)
+                       return;
+
+                   juce::StringArray inUse;
+                   for (auto& f : files)
+                   {
+                       if (liveSet.describeUsage (f).isNotEmpty())
+                           inUse.add (f.getFileNameWithoutExtension());
+                       else
+                           liveSet.pool.removeAllInstancesOf (f);
+                   }
+
+                   pool.setFiles (liveSet.pool);
+                   if (! inUse.isEmpty())
+                       errorMessage = "Still on a channel, clear it there first: " + inUse.joinIntoString (", ");
+                   saveSession();
+                   repaint();
+               });
 }
 
 void MainComponent::dropFilesAt (const juce::Array<juce::File>& files, juce::Point<int> pos, bool fromOutside)
@@ -6247,6 +6262,14 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         showHelp();
         return true;
     }
+
+    // Delete removes the samples selected in the panel (when the list itself doesn't have the key).
+    if ((key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) && ! pool.isCollapsed())
+        if (const auto selected = pool.getSelectedFiles(); ! selected.isEmpty())
+        {
+            removeFromPool (selected);
+            return true;
+        }
 
     if (key == juce::KeyPress::F11Key)
     {
@@ -6927,31 +6950,11 @@ void MainComponent::applyFaderMidi (const juce::String& target, ChannelStrip& st
 void MainComponent::applyFaderMidi (const juce::String& target, juce::Slider& fader, float proportion,
                                     const std::function<void (float)>& showHardwarePosition)
 {
-    // Soft takeover: the hardware control only takes over once it reaches the
-    // on-screen position, so a knob left somewhere else can't cause a jump.
-    auto& t = takeover[target];
-    const float current = (float) fader.valueToProportionOfLength (fader.getValue());
-
-    // Moved on screen since the hardware last set it: the hardware has to catch up again.
-    if (t.locked && std::abs (current - t.last) > 0.02f)
-        t.locked = false;
-
-    if (! t.locked)
-    {
-        const bool crossed = t.last >= 0.0f && (t.last - current) * (proportion - current) <= 0.0f;
-        t.locked = std::abs (proportion - current) < 0.03f || crossed;
-    }
-    t.last = proportion;
-
-    if (t.locked)
-    {
-        fader.setValue (fader.proportionOfLengthToValue (proportion));
-        if (showHardwarePosition) showHardwarePosition (-1.0f);
-    }
-    else if (showHardwarePosition)
-    {
-        showHardwarePosition (proportion);
-    }
+    // Soft takeover (see SoftTakeover): until the hardware reaches the on-screen position, it's shown
+    // where it is instead.
+    const bool moved = takeover[target].apply (fader, proportion);
+    if (showHardwarePosition)
+        showHardwarePosition (moved ? -1.0f : proportion);
 }
 
 void MainComponent::showLearnMenu (const juce::String& target, const juce::String& label)

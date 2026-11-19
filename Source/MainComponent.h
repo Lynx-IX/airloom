@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SoftTakeover.h"
 #include <JuceHeader.h>
 #include "ChannelStrip.h"
 #include "FxPanel.h"
@@ -158,6 +159,7 @@ private:
 
     // Sets
     void showSetMenu();
+    void removeFromPool (const juce::Array<juce::File>& files);   // asks first
     int relinkMissing (const juce::Array<juce::File>& searchFolders);   // returns how many were found
     int countMissing() const;
     void findMissingSamples();
@@ -582,8 +584,7 @@ private:
     MidiMap midiMap;
     juce::String learnTarget, learnLabel;
 
-    struct Takeover { bool locked = false; float last = -1.0f; };
-    std::map<juce::String, Takeover> takeover;
+    std::map<juce::String, SoftTakeover> takeover;
     OutputLimiter outputLimiter;
     std::map<int, bool> ledState;   // MidiMix button lights as last sent
     std::map<int, int> fireButtonState;   // Fire button lights as last sent

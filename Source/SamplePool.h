@@ -70,6 +70,7 @@ public:
     std::function<juce::String (const juce::File&)> describeUsage;   // e.g. "C 1, Nature"
     std::function<bool (const juce::File&)> isPlaying;               // on a channel that's playing
     std::function<void()> onFoldersChanged;                          // the folders changed: save the set
+    std::function<void (const juce::Array<juce::File>&)> onDelete;   // Delete (or Backspace) on the selection
 
     // The set's folders, which the panel shows and changes (it must outlive the panel's use of it).
     void setFolders (LiveSet::PoolFolders* newFolders)   { folders = newFolders; rebuild(); }
@@ -470,6 +471,8 @@ private:
         if (onRightClick)
             onRightClick (getSelectedFiles());
     }
+
+    void deleteKeyPressed (int) override       { if (onDelete && ! getSelectedFiles().isEmpty()) onDelete (getSelectedFiles()); }
 
     juce::var getDragSourceDescription (const juce::SparseSet<int>& selectedRows) override
     {

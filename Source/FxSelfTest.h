@@ -22,6 +22,7 @@
 #include "Help.h"
 #include "StageStatus.h"
 #include "SettingsPanel.h"
+#include "SoftTakeover.h"
 
 // Offline checks of the effects chain, run with:  "Live Rig.exe" --fx-selftest <report file>
 // Each check feeds a test signal through FxChain and measures the result.
@@ -2268,6 +2269,39 @@ namespace FxSelfTest
             file.deleteFile();
             juce::FileOutputStream out (file);
             check (out.openedOk() && juce::PNGImageFormat().writeImageToStream (both, out), "Dialogs drawn to " + file.getFullPathName());
+        }
+
+        // ---- A MIDI fader moving a loop's volume, with screen refreshes in between ----
+        {
+            ChannelCard card;
+            double savedDb = 0.0;   // the loop's volume, as the set has it
+            card.onVolume = [&savedDb] (double db) { savedDb = db; };
+            auto refresh = [&] { card.setContent ("Rain", false, false, false, false, ChannelCard::State::playing, savedDb, juce::Colours::teal); };
+            refresh();
+
+            SoftTakeover takeover;
+            auto& slider = card.getVolumeSlider();
+            for (int cc = 0; cc <= 127; ++cc)   // the hardware fader pushed from the bottom to the top
+            {
+                takeover.apply (slider, (float) cc / 127.0f);
+                refresh();                       // the screen refresh that used to put it back
+            }
+            const bool atTop = std::abs (slider.getValue() - 6.0) < 0.01 && std::abs (savedDb - 6.0) < 0.01;
+            for (int cc = 127; cc >= 64; --cc)
+            {
+                takeover.apply (slider, (float) cc / 127.0f);
+                refresh();
+            }
+            check (atTop && savedDb < -11.0 && savedDb > -13.0 && std::abs (slider.getValue() - savedDb) < 0.01,
+                   "A MIDI fader picks up a loop's volume when it reaches it and moves it, through screen refreshes (top "
+                       + juce::String ((int) atTop) + ", halfway " + juce::String (savedDb, 1) + " dB)");
+
+            SoftTakeover fresh;
+            savedDb = 0.0;
+            refresh();
+            fresh.apply (slider, 0.1f);
+            refresh();
+            check (std::abs (slider.getValue()) < 0.01, "A MIDI fader far from a loop's volume doesn't move it until it gets there");
         }
 
         // ---- Samples that moved (a set opened on another computer) ----
